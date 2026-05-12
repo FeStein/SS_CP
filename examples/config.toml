@@ -1,0 +1,47 @@
+# ==========================================================================
+# Solver selection
+# ==========================================================================
+
+[Solver]
+method     = "IPM_classic"    # "IPM_classic", "IPM_acc", or "VP"
+n_steps    = 100          # number of load steps
+
+# ==========================================================================
+# IPM parameters
+# ==========================================================================
+
+[IPM]
+k_max      = 200      # maximum total (outer) IPM iterations
+max_inner  = 50       # maximum Newton iterations per fixed barrier parameter
+mu_init    = 1e3     # initial barrier parameter mu_0
+mu_end     = 1e-12    # final barrier parameter tolerance
+tol_end    = 1e-14    # final residual tolerance
+theta      = 0.1      # adaptive Newton tolerance multiplier: tol = max(tol_end, theta * mu)
+delta      = 0.5      # barrier parameter update exponent: mu_{k+1} = max_alpha(dlambda * s)^(1+delta)
+tau_min    = 0.995    # fraction-to-boundary parameter
+verbose    = true     # print convergence information per load step
+
+# ==========================================================================
+# Visco-plastic solver parameters
+# ==========================================================================
+
+[VP]
+max_iter   = 50       # maximum Newton iterations
+tol        = 1e-8     # residual convergence tolerance
+# dt is derived automatically from [Solver] n_steps as dt = 1/n_steps
+p          = 200      # rate exponent (power-law flow rule)
+gamma0     = 2.9e-3     # reference slip rate
+verbose    = true     # print convergence information per load step
+
+# ==========================================================================
+# Material parameters
+# ==========================================================================
+
+[Material]
+E          = 1500.0    # Young's modulus in MPa
+nu         = 0.3    # Poisson's ratio
+tau0       = 1.0      # initial critical resolved shear stress in MPa
+q          = 1.0      # latent hardening ratio
+xi         = 0.5      # hardening saturation exponent
+tau_inf    = 0.0      # saturation shear stress in MPa
+phi_deg    = [0.0, 0.0, 0.0]   # Euler angles in degree

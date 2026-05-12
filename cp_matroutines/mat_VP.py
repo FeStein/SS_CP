@@ -116,7 +116,10 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         sig_trial = jnp.einsum('ijkl,kl->ij', C, eps_j - eps_p_n)
         if verbose:
             print("  VP elastic predictor successful.")
-        return np.array(sig_trial), hist, 0
+        hist_el = hist.copy()
+        tau_trial = jnp.einsum('aij,ij->a', Za, sig_trial)
+        hist_el["yield"] = np.array(tau_trial - tau0)
+        return np.array(sig_trial), hist_el, 0
 
     # ======================================================================
     # 2.  Newton iteration with backtracking (dgamma >= 0 enforced)
@@ -165,7 +168,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     new_hist["gamma_a"] = hist["gamma_a"] + np.array(dgamma)
     new_hist["tau_h"]   = hist["tau_h"]          # no hardening update
 
-    yield_function = np.max(jnp.einsum('aij,ij->a', Za, sig) - tau0)
-    print(f"  VP yield function = {yield_function}")
+    tau = jnp.einsum('aij,ij->a', Za, sig)
+    new_hist["yield"] = np.array(tau - tau0)
 
     return np.array(sig), new_hist, n_iter

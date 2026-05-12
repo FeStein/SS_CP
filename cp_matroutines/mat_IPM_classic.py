@@ -215,6 +215,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             print("  Elastic predictor successful.")
         hist_el = hist.copy()
         hist_el["C_ep"] = np.array(C)
+        hist_el["yield"] = np.array(Phi_trial)
         return np.array(sig_trial), hist_el, 0
 
     # ======================================================================
@@ -328,6 +329,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     new_hist["gamma_a"] = hist["gamma_a"] + np.array(dlambda)
     new_hist["tau_h"]   = hist["tau_h"]          # no hardening update
     new_hist["n_iter"]  = total_newton_iter
+    new_hist["yield"]   = np.array(Phi_fn(dlambda))
 
     # Consistent tangent via IFT
     C_ep = compute_tangent_IFT(dlambda, eps_j, eps_p_n, gamma_n, C, Za,

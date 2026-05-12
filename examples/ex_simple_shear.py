@@ -81,4 +81,8 @@ for i, scale in enumerate(np.linspace(0, 1, n_steps + 1)):
     with open(os.path.join(out_dir, "newton.csv"), "a") as f:
         f.write(f"{shear},{n_iter}\n")
 
+    # output yield function values
+    with open(os.path.join(out_dir, "yield.csv"), "a") as f:
+        f.write(f"{shear}," + ",".join(map(str, hist["yield"])) + "\n")
+
 print("Simulation completed. Results saved in 'out/' directory.")

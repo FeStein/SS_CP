@@ -190,6 +190,7 @@ class Material:
             "eps_p": np.zeros((3, 3)),
             "gamma_a": np.zeros(nSlip),
             "tau_h": np.ones(nSlip) * self.tau0,
+            "yield": np.zeros(nSlip),
         }
         return hist
 

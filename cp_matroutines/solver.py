@@ -8,7 +8,7 @@ from cp_matroutines.mat_VP import compute_stress as _vp
 
 _SOLVERS = {
     "IPM_classic": (_ipm_classic, "IPM"),
-    "IPM_acc": (_ipm_acc, "IPM"),
+    #"IPM_acc": (_ipm_acc, "IPM"),
     "VP":  (_vp,  "VP"),
 }
 
