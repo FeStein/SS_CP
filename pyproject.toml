@@ -1,0 +1,14 @@
+[project]
+name = "cp-matroutines"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Material routines for CP calculations for small-strains"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "jax",
+]
+
+[build-system]
+requires = ["setuptools"]
