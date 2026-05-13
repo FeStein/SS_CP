@@ -1,20 +1,21 @@
 """
 Visco-plastic return mapping for rate-dependent single crystal plasticity
-at small strains (24 slip systems, power-law flow rule).
+at small strains (24 slip systems, Perzyna-type power-law flow rule).
 
 Uses a standard Newton-Raphson iteration on the residual
 
-    r^alpha = dgamma^alpha / (gamma0 * dt)
-              - |tau^alpha / g^alpha|^(p-1) * (tau^alpha / g^alpha)
+    r^alpha = dgamma^alpha / (dt/eta)
+              - <(tau^alpha - g^alpha) / tau_ref>^p
 
 where tau^alpha = Z^alpha : sigma(dgamma) is the resolved shear stress,
-g^alpha is the current hardening stress, and p is the rate exponent.
+g^alpha = tau0 is the current slip resistance, tau_ref = tau0 is the
+reference stress, eta the viscosity, and p the rate exponent.
+<...> denotes the Macaulay bracket (positive part).
 
 Derivatives of the residual are computed via JAX automatic differentiation.
 
 References:
-  Scheunemann et al. (2017), Tab. 8.1 / Eq. 4.36-4.39
-  Peirce et al. (1982) — hardening law
+  vp_derive.md — Perzyna-type generalization via power-law penalty
 """
 
 import numpy as np
@@ -33,7 +34,7 @@ from cp_matroutines.cp_base import Material
 @jax.jit
 def _residual(dgamma, eps, eps_p_n, C, Za, tau0, p, dgamma0):
     r"""
-    Visco-plastic residual for all 24 slip systems.
+    Perzyna-type visco-plastic residual for all slip systems.
 
     Parameters
     ----------
@@ -42,9 +43,9 @@ def _residual(dgamma, eps, eps_p_n, C, Za, tau0, p, dgamma0):
     eps_p_n  : (3,3) plastic strain from previous step
     C        : (3,3,3,3) elasticity tensor
     Za       : (m,3,3) Schmid tensors
-    tau0     : float — current (constant) hardening stress
+    tau0     : float — slip resistance (= tau_ref here)
     p        : float — rate exponent
-    dgamma0  : float — reference slip rate * dt
+    dgamma0  : float — dt / eta (viscosity-scaled time step)
 
     Returns
     -------
@@ -53,8 +54,8 @@ def _residual(dgamma, eps, eps_p_n, C, Za, tau0, p, dgamma0):
     eps_p = eps_p_n + jnp.einsum('a,aij->ij', dgamma, Za)
     sig = jnp.einsum('ijkl,kl->ij', C, eps - eps_p)
     tau = jnp.einsum('aij,ij->a', Za, sig)
-    ratio = tau / tau0
-    return dgamma / dgamma0 - jnp.maximum(ratio, 0.0) ** p
+    overstress = (tau - tau0) / tau0      # Phi^alpha / tau_ref
+    return dgamma / dgamma0 - jnp.maximum(overstress, 0.0) ** p
 
 _residual_jacobian = jax.jit(jax.jacfwd(_residual, argnums=0))
 
@@ -91,7 +92,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     verbose  = config["verbose"]
 
     nSlip    = len(mat.Za)
-    dgamma0  = config["gamma0"] * dt
+    dgamma0  = dt / config["eta"]      # dt / eta
 
     # -- Convert to JAX arrays ----------------------------------------------
     Za      = jnp.array(np.stack(mat.Za))
@@ -109,15 +110,15 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         return _residual_jacobian(dg, eps_j, eps_p_n, C, Za, tau0, p, dgamma0)
 
     # ======================================================================
-    # 1.  Elastic predictor
+    # 1.  Elastic predictor — yield-function check (independent of p / tol)
     # ======================================================================
-    r0 = R_fn(jnp.zeros(nSlip))
-    if float(jnp.linalg.norm(r0)) < tol:
-        sig_trial = jnp.einsum('ijkl,kl->ij', C, eps_j - eps_p_n)
+    sig_trial = jnp.einsum('ijkl,kl->ij', C, eps_j - eps_p_n)
+    tau_trial = jnp.einsum('aij,ij->a', Za, sig_trial)
+
+    if float(jnp.max(tau_trial - tau0)) <= 0.0:
         if verbose:
             print("  VP elastic predictor successful.")
         hist_el = hist.copy()
-        tau_trial = jnp.einsum('aij,ij->a', Za, sig_trial)
         hist_el["yield"] = np.array(tau_trial - tau0)
         return np.array(sig_trial), hist_el, 0
 
