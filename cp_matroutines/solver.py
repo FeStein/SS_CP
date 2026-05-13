@@ -6,11 +6,13 @@ compute_stress function and its solver-specific config section.
 from cp_matroutines.mat_IPM_classic import compute_stress as _ipm_classic
 from cp_matroutines.mat_IPM_adaptive_mu import compute_stress as _ipm_adaptive_mu
 from cp_matroutines.mat_VP import compute_stress as _vp
+from cp_matroutines.mat_AL_SB import compute_stress as _al_sb
 
 _SOLVERS = {
     "IPM_classic": (_ipm_classic, "IPM"),
-    "IPM_amu": (_ipm_adaptive_mu, "IPM"),
-    "VP":  (_vp,  "VP"),
+    "IPM_amu":     (_ipm_adaptive_mu, "IPM"),
+    "VP":          (_vp,  "VP"),
+    "AL":          (_al_sb, "AL"),
 }
 
 def get_config_key(method: str) -> str:
