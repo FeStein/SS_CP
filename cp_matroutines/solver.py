@@ -4,11 +4,12 @@ compute_stress function and its solver-specific config section.
 """
 
 from cp_matroutines.mat_IPM_classic import compute_stress as _ipm_classic
+from cp_matroutines.mat_IPM_adaptive_mu import compute_stress as _ipm_adaptive_mu
 from cp_matroutines.mat_VP import compute_stress as _vp
 
 _SOLVERS = {
     "IPM_classic": (_ipm_classic, "IPM"),
-    #"IPM_acc": (_ipm_acc, "IPM"),
+    "IPM_amu": (_ipm_adaptive_mu, "IPM"),
     "VP":  (_vp,  "VP"),
 }
 
@@ -26,6 +27,5 @@ def get_solver(config: dict):
         raise ValueError(f"Unknown solver method '{method}'. Available: {list(_SOLVERS.keys())}")
     compute_fn, config_key = _SOLVERS[method]
     solver_cfg = dict(config[config_key])          # shallow copy so we can inject keys
-    if method == "VP":
-        solver_cfg["dt"] = 1.0 / config["Solver"]["n_steps"]
+    solver_cfg["dt"] = 1.0 / config["Solver"]["n_steps"]
     return compute_fn, solver_cfg
