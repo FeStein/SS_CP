@@ -280,7 +280,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             R_g = Phi_fn(dlambda) + slacks
             R_s = dlambda * slacks - mu
             R   = jnp.concatenate([R_g, R_s])
-            r   = float(jnp.linalg.norm(R)) /r0
+            r   = float(jnp.linalg.norm(R))
 
             #increase counters
             n += 1
@@ -301,7 +301,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         # Recompute residual with new mu
         R_s = dlambda * slacks - mu
         R   = jnp.concatenate([R_g, R_s])
-        r   = float(jnp.linalg.norm(R)) / r0
+        r   = float(jnp.linalg.norm(R))
 
         if verbose:
             print(f"  IPM iter {total_newton_iter}: mu = {mu:.2e}, ||R|| = {r:.2e}")
