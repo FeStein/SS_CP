@@ -3,8 +3,8 @@
 # ==========================================================================
 
 [Solver]
-method     = "IPM_classic"    # "IPM_classic", "IPM_acc", or "VP"
-n_steps    = 100          # number of load steps
+method     = "IPM_amu"     # "IPM_classic", "IPM_amu", "AL", "VP"
+n_steps    = 1000          # number of load steps
 
 # ==========================================================================
 # IPM parameters
@@ -14,11 +14,41 @@ n_steps    = 100          # number of load steps
 k_max      = 200      # maximum total (outer) IPM iterations
 max_inner  = 50       # maximum Newton iterations per fixed barrier parameter
 mu_init    = 1e3     # initial barrier parameter mu_0
-mu_end     = 1e-12    # final barrier parameter tolerance
+mu_end     = 1e-11    # final barrier parameter tolerance
 tol_end    = 1e-14    # final residual tolerance
 theta      = 0.1      # adaptive Newton tolerance multiplier: tol = max(tol_end, theta * mu)
 delta      = 0.5      # barrier parameter update exponent: mu_{k+1} = max_alpha(dlambda * s)^(1+delta)
 tau_min    = 0.995    # fraction-to-boundary parameter
+verbose    = true     # print convergence information per load step
+# dt is derived automatically from [Solver] n_steps as dt = 1/n_steps
+
+# ==========================================================================
+# Modified-Barrier IPM parameters (Polyak 1992; Polyak & Teboulle 1997)
+# ==========================================================================
+
+[MB_IPM]
+k_max        = 100     # maximum outer (multiplier) iterations
+max_inner    = 50      # maximum Newton iterations per outer step
+mu_init      = 1e-2    # initial/fixed shift parameter (~ 0.01 * tau0)
+mu_floor     = 1e-2    # lower bound for mu (= mu_init for fixed shift)
+rho          = 1.0     # outer mu reduction factor (1.0 = fixed shift)
+lambda_init  = 1.0     # initial multiplier estimate (must be > 0)
+tol_inner    = 1e-10   # inner Newton absolute residual tolerance
+tol_mult     = 1e-10   # outer convergence: max relative multiplier change
+tol_compl    = 1e-12   # outer convergence: max complementarity gap |lam * s|
+tau_min      = 0.995   # fraction-to-boundary safety factor (applied to s + mu)
+verbose      = true    # print convergence information per load step
+
+# ==========================================================================
+# Augmented Lagrangian parameters (Schmidt-Baldassari 2003)
+# ==========================================================================
+
+[AL]
+max_outer  = 50       # maximum outer (penalty) iterations
+max_inner  = 25       # maximum semi-smooth Newton iterations per outer step
+eta_init   = 1.0     # initial penalty parameter
+tol_inner  = 1e-8    # Newton step-size convergence tolerance
+tol_kkt    = 1e-18   # KKT complementarity tolerance ||dgamma * Phi||
 verbose    = true     # print convergence information per load step
 
 # ==========================================================================
@@ -27,10 +57,10 @@ verbose    = true     # print convergence information per load step
 
 [VP]
 max_iter   = 50       # maximum Newton iterations
-tol        = 1e-8     # residual convergence tolerance
+tol        = 1e-14     # residual convergence tolerance
 # dt is derived automatically from [Solver] n_steps as dt = 1/n_steps
-p          = 200      # rate exponent (power-law flow rule)
-gamma0     = 2.9e-3     # reference slip rate
+p          = 1        # rate exponent (1 = linear Bingham; p>1 = power-law Perzyna
+eta        = 3.061e-3     # viscosity parameter (dgamma0 = dt/eta); overstress ~ eta * gamma_dot
 verbose    = true     # print convergence information per load step
 
 # ==========================================================================
@@ -45,3 +75,21 @@ q          = 1.0      # latent hardening ratio
 xi         = 0.5      # hardening saturation exponent
 tau_inf    = 0.0      # saturation shear stress in MPa
 phi_deg    = [0.0, 0.0, 0.0]   # Euler angles in degree
+
+# ==========================================================================
+# Parameter sweep (used by ex_simple_shear_sweep.py)
+# ==========================================================================
+# param   : dotted path "Section.key" into this config to override per run
+# values  : list of values to iterate over
+# label   : prefix for output folder names
+#
+# Examples:
+#   param = "IPM.mu_end",     values = [1e-4, 1e-6, ..., 1e-12]  -> out_mu4, out_mu6, ...
+#   param = "Solver.n_steps", values = [100, 500, 1000]           -> out_steps100, out_steps500, ...
+#   param = "VP.eta",         values = [1e-3, 3e-3, 1e-2]         -> out_eta3, out_eta00, out_eta2
+
+[Sweep]
+param  = "IPM.mu_end"
+values = [1e-3,1e-4,1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12,1e-13, 1e-14]
+#values = [3e3, 3e2, 3e1, 3e0, 3e-1, 3e-2, 3e-3, 3e-4, 3e-5, 3e-6, 3e-7, 3e-8, 3e-9, 3e-10, 3e-11, 3e-12]
+label  = "mu"
