@@ -321,7 +321,8 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         print(f"  IPM {status} in {total_newton_iter} iterations, mu = {mu:.2e}, ||R|| = {r:.2e}")
 
     if not converged:
-        print("WARNING: IPM did not converge to the desired tolerance. Returning trial stress.")
+        if verbose:
+            print("WARNING: IPM did not converge to the desired tolerance.")
         return np.zeros((3, 3)), hist, -1
 
     # Update history

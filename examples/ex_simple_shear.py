@@ -6,8 +6,13 @@ scaled linearly from 0 to 1 over 100 load steps (max shear deformation 0.01).
 The solver (IPM or VP) is selected via config.toml [Solver] method.
 
 Outputs gamma_a, sigma (Voigt), and Newton iterations per step into out/.
+
+Usage:
+    python ex_simple_shear.py                   # use Euler angles from config.toml
+    python ex_simple_shear.py --orientation 42  # use row 42 of initial_rotations.csv
 """
 
+import argparse
 import os
 import shutil
 import tomllib
@@ -15,6 +20,14 @@ import numpy as np
 
 from cp_matroutines.cp_base import Material, ten2voigt, gamma24_to_12
 from cp_matroutines.solver import get_solver
+
+# --- CLI ----------------------------------------------------------------------
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--orientation", type=int, default=None, metavar="N",
+    help="1-based row index into initial_rotations.csv (overrides phi_deg in config)",
+)
+args = parser.parse_args()
 
 # --- Load solver config from TOML -----------------------------------------
 config_path = os.path.join(os.path.dirname(__file__), "config.toml")
@@ -35,6 +48,19 @@ mat = Material(
     tau_inf=mat_cfg["tau_inf"],
     phi=tuple(np.deg2rad(mat_cfg["phi_deg"])),
 )
+
+if args.orientation is not None:
+    rot_csv = os.path.join(os.path.dirname(__file__), "initial_rotations.csv")
+    rotations = np.loadtxt(rot_csv, delimiter=",")
+    n_total = len(rotations)
+    if not (1 <= args.orientation <= n_total):
+        raise ValueError(f"--orientation must be between 1 and {n_total}, got {args.orientation}")
+    rot = rotations[args.orientation - 1].reshape(3, 3)
+    mat.set_orientation(rot)
+    print(f"Orientation: row {args.orientation} of initial_rotations.csv")
+else:
+    print(f"Orientation: Euler angles {mat_cfg['phi_deg']} deg")
+
 hist = mat.initialize_history()
 
 # --- Output directory ------------------------------------------------------

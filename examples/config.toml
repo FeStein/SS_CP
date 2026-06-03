@@ -3,8 +3,8 @@
 # ==========================================================================
 
 [Solver]
-method     = "IPM_amu"     # "IPM_classic", "IPM_amu", "AL", "VP"
-n_steps    = 1000          # number of load steps
+method     = "IPM_mb"     # "IPM_classic", "IPM_amu", "AL", "VP"
+n_steps    = 100          # number of load steps
 
 # ==========================================================================
 # IPM parameters
@@ -13,9 +13,9 @@ n_steps    = 1000          # number of load steps
 [IPM]
 k_max      = 200      # maximum total (outer) IPM iterations
 max_inner  = 50       # maximum Newton iterations per fixed barrier parameter
-mu_init    = 1e3     # initial barrier parameter mu_0
-mu_end     = 1e-11    # final barrier parameter tolerance
-tol_end    = 1e-14    # final residual tolerance
+mu_init    = 1e-3     # initial barrier parameter mu_0
+mu_end     = 1e-12    # final barrier parameter tolerance
+tol_end    = 1e-12    # final residual tolerance
 theta      = 0.1      # adaptive Newton tolerance multiplier: tol = max(tol_end, theta * mu)
 delta      = 0.5      # barrier parameter update exponent: mu_{k+1} = max_alpha(dlambda * s)^(1+delta)
 tau_min    = 0.995    # fraction-to-boundary parameter
@@ -29,15 +29,23 @@ verbose    = true     # print convergence information per load step
 [MB_IPM]
 k_max        = 100     # maximum outer (multiplier) iterations
 max_inner    = 50      # maximum Newton iterations per outer step
-mu_init      = 1e-2    # initial/fixed shift parameter (~ 0.01 * tau0)
-mu_floor     = 1e-2    # lower bound for mu (= mu_init for fixed shift)
-rho          = 1.0     # outer mu reduction factor (1.0 = fixed shift)
-lambda_init  = 1.0     # initial multiplier estimate (must be > 0)
-tol_inner    = 1e-10   # inner Newton absolute residual tolerance
-tol_mult     = 1e-10   # outer convergence: max relative multiplier change
+mu_init      = 1e-3    # initial shift parameter (~ 0.01 * tau0); APV adapts from here
+mu_floor     = 1e-14   # hard lower bound for mu
+mu_ceil      = 1e-1    # upper bound for mu (inner-failure smoothing; ~ 0.1 * tau0)
+mu_dec       = 0.1     # APV: mu reduction factor on outer stall (smaller mu = faster outer)
+mu_inc       = 10.0    # APV: mu increase factor on inner-solve failure
+theta        = 0.5     # APV: sufficient-decrease factor for the KKT merit (0 < theta < 1)
+max_retry    = 5       # APV: max consecutive inner-failure mu-increases before abort
+lambda_init  = 3e-5    # initial multiplier estimate (must be > 0)
+tol_inner    = 1e-14   # inner Newton absolute residual tolerance
+inner_stall_patience = 5     # break inner Newton after this many steps with no progress on ||R||
+inner_stall_rtol     = 1e-3  # min relative ||R|| decrease per step to count as progress
+tol_dep      = 1e-6    # outer convergence: ||change in plastic-strain increment|| (Taylor-invariant)
 tol_compl    = 1e-12   # outer convergence: max complementarity gap |lam * s|
 tau_min      = 0.995   # fraction-to-boundary safety factor (applied to s + mu)
 verbose      = true    # print convergence information per load step
+debug        = true    # warn when the Polyak update (lam_k) decouples from the primal slip (dlambda)
+debug_tol    = 1e-2    # relative drift threshold for the debug warning
 
 # ==========================================================================
 # Augmented Lagrangian parameters (Schmidt-Baldassari 2003)
@@ -48,7 +56,7 @@ max_outer  = 50       # maximum outer (penalty) iterations
 max_inner  = 25       # maximum semi-smooth Newton iterations per outer step
 eta_init   = 1.0     # initial penalty parameter
 tol_inner  = 1e-8    # Newton step-size convergence tolerance
-tol_kkt    = 1e-18   # KKT complementarity tolerance ||dgamma * Phi||
+tol_kkt    = 1e-13   # KKT complementarity tolerance ||dgamma * Phi||
 verbose    = true     # print convergence information per load step
 
 # ==========================================================================
@@ -77,6 +85,13 @@ tau_inf    = 0.0      # saturation shear stress in MPa
 phi_deg    = [0.0, 0.0, 0.0]   # Euler angles in degree
 
 # ==========================================================================
+# Orientation parameter study (used by ex_orientation_study.py)
+# ==========================================================================
+
+[ParStudy]
+n_workers  = 12     # parallel worker processes (remove or set to 0 for all cores)
+
+# ==========================================================================
 # Parameter sweep (used by ex_simple_shear_sweep.py)
 # ==========================================================================
 # param   : dotted path "Section.key" into this config to override per run
@@ -89,7 +104,8 @@ phi_deg    = [0.0, 0.0, 0.0]   # Euler angles in degree
 #   param = "VP.eta",         values = [1e-3, 3e-3, 1e-2]         -> out_eta3, out_eta00, out_eta2
 
 [Sweep]
-param  = "IPM.mu_end"
-values = [1e-3,1e-4,1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12,1e-13, 1e-14]
+param  = "MB_IPM.mu_init"
+#values = [10,50,100, 500, 1000, 5000, 10000]
+values = [1e-1, 1e-2, 1e-3,1e-4,1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10]
 #values = [3e3, 3e2, 3e1, 3e0, 3e-1, 3e-2, 3e-3, 3e-4, 3e-5, 3e-6, 3e-7, 3e-8, 3e-9, 3e-10, 3e-11, 3e-12]
-label  = "mu"
+label  = "mu_"

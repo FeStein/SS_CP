@@ -194,7 +194,8 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     # 4.  Post-processing
     # ========================================================================
     if not converged:
-        print("WARNING: AL did not converge. Returning zero stress.")
+        if verbose:
+            print("WARNING: AL did not converge.")
         return np.zeros((3, 3)), hist, -1
 
     eps_p_new = eps_p_n + jnp.einsum('a,aij->ij', dlambda, Za)

@@ -265,6 +265,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             d_dlambda = delta_x[:nSlip]
             d_slacks = delta_x[nSlip:]
 
+
             # Fraction-to-boundary
             alpha_dl = jnp.where(d_dlambda < 0, -tau_min * dlambda / d_dlambda, jnp.inf)
             alpha_ds = jnp.where(d_slacks  < 0, -tau_min * slacks  / d_slacks,  jnp.inf)
@@ -273,6 +274,8 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             # Update primal-dual iterates
             dlambda = dlambda + alpha_max * d_dlambda
             slacks = slacks + alpha_max * d_slacks
+
+            print(f"OUT - cond: {k},{mu:.2e},{np.linalg.norm(dlambda*slacks)},{np.linalg.cond(J):.2e}")
 
             # Recompute residual
             R_g = Phi_fn(dlambda) + slacks
@@ -319,7 +322,8 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         print(f"  IPM {status} in {total_newton_iter} iterations, mu = {mu:.2e}, ||R|| = {r:.2e}")
 
     if not converged:
-        print("WARNING: IPM did not converge to the desired tolerance. Returning trial stress.")
+        if verbose:
+            print("WARNING: IPM did not converge to the desired tolerance.")
         return np.zeros((3, 3)), hist, -1
 
     # Update history

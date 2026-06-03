@@ -82,30 +82,46 @@ Structurally identical to the classical IPM system (`ipm.md`) except the (2,1) b
 Elastic predictor at $\Delta\boldsymbol{\gamma} = \mathbf{0}$. If $\Phi^\alpha \leq 0$ for all $\alpha$, the step is purely elastic.
 
 Otherwise:
-$$\mu_0 = \mu_\text{init}, \qquad \lambda^\alpha_{k=0} = \lambda_\text{init} > 0, \qquad s^\alpha_0 = \max(-\Phi^\alpha_\text{trial},\,\sqrt{\mu_0}), \qquad \Delta\gamma^\alpha_0 = \sqrt{\mu_0}$$
+$$\mu_0 = \mu_\text{init}, \qquad \lambda^\alpha_{k=0} = \lambda^\alpha_\text{prev} > 0, \qquad s^\alpha_0 = \max(-\Phi^\alpha_\text{trial},\,\sqrt{\mu_0}), \qquad \Delta\gamma^\alpha_0 = \sqrt{\mu_0}$$
 
-The multiplier estimates are initialized to a uniform *positive* value (e.g. $\lambda_\text{init} = 1$). Initializing at zero is forbidden: the update rule below preserves zero as a fixed point and would lock such a system out permanently.
+The multiplier estimates are **warm-started from the converged multipliers of the previous load step** $\lambda^\alpha_\text{prev}$. This provides a near-optimal initial guess for incremental loading, cutting the required outer iterations to near zero for small load increments. On the very first step (no previous history) a uniform positive value $\lambda_\text{init} > 0$ is used as fallback. Initializing at zero is forbidden: the update rule preserves zero as a fixed point and would lock such a system out permanently.
 
 #### Outer Lagrange-Multiplier Loop (index $k$)
 
 **1. Inner Newton solve** at fixed $(\mu_k, \boldsymbol{\lambda}_k)$, iterating the Newton system above with the fraction-to-boundary safeguard
 $$\alpha_\text{max} = \min\!\left(1,\; \min_{\delta\!\Delta\gamma^\alpha < 0}\frac{-\tau_\text{min}\,\Delta\gamma^\alpha}{\delta\!\Delta\gamma^\alpha},\; \min_{\delta s^\alpha < 0}\frac{-\tau_\text{min}\,(s^\alpha + \mu)}{\delta s^\alpha}\right)$$
-until $\|\mathbf{R}\|/r_0 < \texttt{tol}_\text{inner}$. Note the slack constraint is on $s^\alpha + \mu > 0$, not $s^\alpha > 0$ — temporary mild yield violation is allowed during iteration, which makes long Newton steps acceptable.
+until $\|\mathbf{R}\|/r_0 < \texttt{tol}_\text{inner}$. The slack cap is on $s^\alpha + \mu > 0$, not $s^\alpha > 0$: the barrier's singularity sits at $s^\alpha = -\mu$, so the iterate must merely stay in its *domain*, and temporary mild yield violation is allowed during iteration, which makes long Newton steps acceptable. The cap therefore fires on **every** descending slack direction $\delta s^\alpha < 0$ (each can drive $s^\alpha+\mu$ toward the boundary), and on every descending $\delta\!\Delta\gamma^\alpha < 0$ to keep $\Delta\gamma^\alpha > 0$.
+
+**Inner-failure / blow-up safeguard.** Two situations spoil an outer step: a *stiff* inner problem (a small $\mu$ shrinks the band $(-\mu,\infty)$ and shortens the admissible steps, so the inner Newton cannot reach $\texttt{tol}_\text{inner}$ within `max_inner` steps), and a *blow-up* of the multiplier estimate. The latter is the dangerous one and arises at an **active-set change**: a newly-activating system sits near the shifted boundary $s^\alpha \to -\mu$, where the update $\lambda^\alpha_{k+1} = \mu\lambda^\alpha_k/(s^\alpha+\mu)$ has a near-singular denominator and amplifies $\lambda^\alpha$ violently (in practice $\lambda^\alpha \to \infty$ within a few sweeps, then $\textsf{NaN}$). Both are handled by a **cold restart at a larger $\mu$**: set $\mu_{k+1} = \min(\rho_\uparrow\,\mu_k,\,\mu_\text{ceil})$ with $\rho_\uparrow > 1$ (a wider band moves the boundary away from the activating system), and re-initialize the *entire* iterate from the cold-start values — $s^\alpha$, $\Delta\gamma^\alpha$, **and** the multiplier estimate $\lambda^\alpha_k \leftarrow \lambda_\text{init}$. Resetting $\lambda_k$ is essential: merely raising $\mu$ carries the already-poisoned (or non-finite) estimate forward, and the warm-started $\lambda_k$ is precisely what was inconsistent with the new active set. The dynamic floor is pinned to the raised value, $\mu_\text{lo} \leftarrow \mu_{k+1}$, so the APV ($\S$4) cannot tighten straight back into the regime that just failed. Only if $\mu_k$ reaches $\mu_\text{ceil}$ or the retry budget is spent does the step report failure. (A non-finite residual must be tested explicitly — $\textsf{NaN}$ fails every comparison and would otherwise slip past the stall test and stall the outer loop.)
 
 **2. Multiplier update** from the converged inner state:
 $$\boxed{\lambda^\alpha_{k+1} = \frac{\mu_k\,\lambda^\alpha_k}{s^\alpha_* + \mu_k}}$$
 This is the stationarity condition rearranged. It preserves positivity, decays on inactive systems ($s^\alpha_* \gg \mu_k \Rightarrow \lambda^\alpha_{k+1} \ll \lambda^\alpha_k$), and remains essentially unchanged on active ones ($s^\alpha_* \approx 0 \Rightarrow \lambda^\alpha_{k+1} \approx \lambda^\alpha_k$).
 
-**3. (Optional) Shift update**. Unlike the classical IPM, driving $\mu_k \to 0$ is **not** required: Polyak's theorem guarantees that for any $\mu < \mu^*$ (a problem-dependent threshold) the multiplier sequence converges linearly to the true KKT multipliers. The classical choice is therefore a fixed $\mu$:
-$$\mu_{k+1} = \max(\rho\,\mu_k,\,\mu_\text{floor}), \qquad 0 < \rho \leq 1$$
-A safe default is $\rho = 1$ (fixed $\mu$); for stiffer problems, $\rho \in [0.5, 1]$ accelerates convergence at the cost of slightly harder inner Newton steps.
+**3. Outer convergence**. The raw multiplier change is **not** a usable convergence test. At high-symmetry orientations more than five slip systems go active simultaneously; since the symmetric-deviatoric $\boldsymbol{Z}^\alpha$ span only a 5-dimensional space, the active set is then linearly dependent — there exist $\boldsymbol{c} \neq \mathbf{0}$ with $\sum_\alpha c_\alpha \boldsymbol{Z}^\alpha = \mathbf{0}$ (the **Taylor / Bishop–Hill ambiguity**). The converged multipliers $\Delta\gamma^\alpha = \lambda^\alpha_*$ are then non-unique: they drift along $\operatorname{null}(\boldsymbol{Z})$ without changing $\Delta\boldsymbol{\varepsilon}_p$, $\boldsymbol{\sigma}$, or any $\Phi^\alpha$, so $\max_\alpha|\lambda^\alpha_{k+1}-\lambda^\alpha_k|$ never reaches zero even though the stress has fully converged.
 
-**4. Outer convergence**. Terminate when the multipliers have stabilized,
-$$\max_\alpha \frac{|\lambda^\alpha_{k+1} - \lambda^\alpha_k|}{\max(1,\lambda^\alpha_k)} < \texttt{tol}_\text{mult},$$
-or equivalently when the *unshifted* complementarity gap measured at the converged inner state is below threshold:
-$$\max_\alpha |\lambda^\alpha_{k+1}\,s^\alpha_*| < \texttt{tol}_\text{compl}$$
+Convergence is therefore measured on the **plastic-strain increment**, which is invariant under that drift. Terminate when **both** criteria hold simultaneously:
+$$\Big\|\sum_\alpha \big(\Delta\gamma^\alpha_{(k)} - \Delta\gamma^\alpha_{(k-1)}\big)\,\boldsymbol{Z}^\alpha\Big\| < \texttt{tol}_\text{dep} \qquad \textbf{and} \qquad \max_\alpha |\lambda^\alpha_{k+1}\,s^\alpha_*| < \texttt{tol}_\text{compl}.$$
 
-The latter is the direct diagnostic that the *exact* KKT (not the perturbed one) is satisfied.
+Here $\Delta\gamma_{(k)}$ is the **primal** slip increment from the $k$-th inner solve — the variable that defines $\boldsymbol{\varepsilon}_p$ and the returned stress. It is used rather than the multiplier-estimate change $\lambda^\alpha_{k+1}-\lambda^\alpha_k = -\lambda^\alpha_k\,s^\alpha/(s^\alpha+\mu)$, because the two **decouple when $\mu \ll s$**: at a small shift the estimate change is dominated by inner-residual noise in $s$ and keeps drifting on a degenerate set long after the primal slip (and the stress) has frozen. The first criterion is thus the change in $\Delta\boldsymbol{\varepsilon}_p = \sum_\alpha \Delta\gamma^\alpha \boldsymbol{Z}^\alpha$ across the outer update: a drift with $\sum_\alpha c_\alpha \boldsymbol{Z}^\alpha = \mathbf{0}$ leaves it exactly zero, so it certifies that the *physically determined* part of the slip — hence the stress — has settled, regardless of how the redundant systems share the slip. The complementarity gap $|\lambda^\alpha_{k+1} s^\alpha_*|$ is the direct diagnostic that the *exact* KKT is satisfied and controls the achieved accuracy: $|\Phi^\alpha_*| \lesssim \texttt{tol\_compl}/\lambda^\alpha_*$ on active systems. Both are required (an AND): the first guards the solution, the second guards complementarity. Note that stress/$\Delta\boldsymbol{\varepsilon}_p$ uniqueness holds for any symmetric positive-semidefinite hardening (perfect, self, isotropic, latent with $q\le 1$); strongly latent hardening ($q>1$, indefinite interaction matrix) can break it, in which case rate-dependent regularization is the standard remedy.
+
+**4. Shift update — Adjusted Parameter Version (APV)**. Driving $\mu_k \to 0$ is **not** required, but $\mu$ is **not** held strictly fixed either; it is adapted from a merit test. Two competing facts set the trade-off:
+
+- *Outer contraction.* Linearizing the multiplier map about the solution (one active system, local slope $a = -\partial\Phi^\alpha/\partial\Delta\gamma^\alpha > 0$) gives the error recursion $\varepsilon_{k+1} = C\,\varepsilon_k$ with
+$$C = \frac{\mu}{\mu + a\,\lambda^\alpha_*} \in (0,1).$$
+Thus $C \to 0$ as $\mu \to 0$ and $C \to 1$ as $\mu \to \infty$: a **smaller** $\mu$ gives **faster** outer convergence. This is the standard Polyak rate $\|\boldsymbol{\lambda}_{k+1} - \boldsymbol{\lambda}_*\| \le (c/k)\,\|\boldsymbol{\lambda}_k - \boldsymbol{\lambda}_*\|$ with $k = 1/\mu$ (contraction $\propto \mu$), and agrees with the dual-proximal reading of nonlinear rescaling (a larger shift $\mu = 1/k$ is a stronger proximal term, hence smaller dual steps).
+- *Inner stiffness.* A smaller $\mu$ shrinks the shifted-feasible band $(-\mu,\infty)$, shortens the fraction-to-boundary steps, and pins the achievable accuracy to $\texttt{tol}_\text{inner}$ (via $|\Phi^\alpha| \lesssim \texttt{tol\_inner}/\Delta\gamma^\alpha$). Too small a $\mu$ therefore makes the **inner** solve fail even though it would *accelerate* the outer loop.
+
+$\mu$ is thus pulled small by the outer rate and large by inner conditioning. The APV resolves this automatically using the **same plastic-strain-increment measure** as the convergence test for its merit:
+$$v_k = \Big\|\sum_\alpha \big(\Delta\gamma^\alpha_{(k)} - \Delta\gamma^\alpha_{(k-1)}\big)\,\boldsymbol{Z}^\alpha\Big\|.$$
+This quantity is both **$\mu$-independent** (so it is a fair progress measure across $\mu$ changes — unlike the shifted residual $R_s$ or the complementarity gap $|\lambda^\alpha s^\alpha| = \mu|\lambda^\alpha_k - \lambda^\alpha_{k+1}|$, both of which carry an explicit $\mu$ and shrink trivially as $\mu\to 0$, which would otherwise drive $\mu$ to its floor for no real progress) and **Taylor-invariant** (so the slip drift on a degenerate active set does not look like a stall and does not trigger needless $\mu$-tightening). The decision:
+
+- **Sufficient decrease** ($v_{k+1} \le \theta\,v_k$, $0<\theta<1$): keep $\mu$.
+- **Stall** ($v_{k+1} > \theta\,v_k$): tighten $\mu_{k+1} = \max(\rho_\downarrow\,\mu_k,\,\mu_\text{lo})$ with $\rho_\downarrow < 1$ to accelerate the outer rate; the next inner solve re-projects the primal iterate onto the shifted-feasible set.
+
+**Complementarity polish.** A subtlety arises once the stress has settled ($\|\Delta\boldsymbol{\varepsilon}_p\|$-merit below $\texttt{tol}_\text{dep}$) but the gap is still above $\texttt{tol}_\text{compl}$ — e.g. after the inner-failure safeguard ($\S$1) has raised $\mu$. At a fixed active set the residual yield is $|\Phi^\alpha| = |s^\alpha| \sim \mu\,\|\boldsymbol{\lambda}_k - \boldsymbol{\lambda}_{k+1}\|$, so the gap $|\lambda^\alpha s^\alpha|$ scales **linearly with $\mu$** and a larger $\mu$ can floor it above $\texttt{tol}_\text{compl}$. The remedy is to **shrink $\mu$** ($\mu_{k+1}=\max(\rho_\downarrow\mu_k,\mu_\text{floor})$), which drives the gap down proportionally. This reduction is allowed *below* $\mu_\text{lo}$: with no active-set transition in progress, every active slack sits at $s^\alpha \sim +\mu$ and every inactive one at $s^\alpha \gg 0$, so none is near the shifted boundary $s^\alpha=-\mu$ and the blow-up that forced the earlier raise cannot recur. One decade of reduction typically suffices.
+
+The stall-tightening and the inner-failure raising of step 1 never trigger in the same iteration (the inner solve either fails or it doesn't), so they do not oscillate; the dynamic floor $\mu_\text{lo}$ prevents the *stall*-tightening from re-entering a $\mu$ range that already failed, while the complementarity polish bypasses it deliberately, only once the active set has settled. Together they let $\mu$ settle at the **smallest value the inner solve tolerates** — i.e. the fastest stable outer rate — with no a-priori knowledge of the threshold $\bar k = 1/\mu^*$. Because the local return-map problem is **convex** (convex QP objective $\tfrac12\Delta\boldsymbol{\gamma}^\top\!\boldsymbol{Z}^\top\!\mathbb{C}\,\boldsymbol{Z}\,\Delta\boldsymbol{\gamma}$, convex feasible set $\{\Phi^\alpha \le 0\}$), the linear rate of the APV is sufficient and the Varying-Parameter Version (VPV, $\mu_k\to\infty$ in $k$, required for nonconvexity / a superlinear rate) is not needed.
 
 ---
 
@@ -127,7 +143,7 @@ The shifted complementarity in the discrete case carries the same units as in th
 A fully dimensionless variant is obtained by using $\tau_0$ as a reference, exactly as in `ipm_derive.md`:
 $$\tilde{\mu} = \mu/\tau_0, \qquad B_{\tilde\mu} = -\tilde{\mu}\,\tau_0\sum_\alpha \lambda^\alpha_k \ln\!\left(1 + \frac{s^\alpha}{\tilde{\mu}\,\tau_0}\right)$$
 
-with the corresponding shifted condition $\Delta\gamma^\alpha(s^\alpha + \tilde\mu\,\tau_0) = \tilde\mu\,\tau_0\,\lambda^\alpha_k$. Because $\mu$ is no longer a convergence parameter (it stays fixed), the choice $\tilde\mu = O(10^{-2})\text{–}O(10^{-1})$ relative to $\tau_0$ is typically adequate.
+with the corresponding shifted condition $\Delta\gamma^\alpha(s^\alpha + \tilde\mu\,\tau_0) = \tilde\mu\,\tau_0\,\lambda^\alpha_k$. Because $\mu$ is adapted by the APV (lowered for outer speed, raised for inner stability) rather than driven to zero, its precise value is not critical: a small starting $\tilde\mu_\text{init} = O(10^{-2})$ with self-tuning is adequate, and the converged stress/tangent are independent of the value $\mu$ ultimately settles at.
 
 ---
 
@@ -151,12 +167,16 @@ The MB-IPM is the structural analogue of the augmented-Lagrange treatment of the
 
 | Parameter | Description |
 |---|---|
-| `mu_init` | Initial shift parameter $\mu_0$ (typically $\sim 10^{-2}\tau_0$) |
-| `mu_floor` | Lower bound for $\mu_k$ (often $= \mu_\text{init}$, i.e. fixed shift) |
-| `rho` | Outer reduction factor for $\mu_k$ (default 1.0 = fixed) |
-| `lambda_init` | Initial multiplier estimate $\lambda^\alpha_0$ (default 1) |
+| `mu_init` | Initial shift parameter $\mu$ (e.g. $\sim 10^{-2}\tau_0$); the APV adapts it from here |
+| `mu_floor` | Hard lower bound for $\mu_k$ |
+| `mu_ceil` | Upper bound for $\mu_k$ used by the inner-failure safeguard (e.g. $\sim 10^{-1}\tau_0$) |
+| `mu_dec` | APV reduction factor $\rho_\downarrow < 1$ applied to $\mu_k$ on outer stall (smaller $\mu$ = faster outer) |
+| `mu_inc` | APV increase factor $\rho_\uparrow > 1$ applied to $\mu_k$ on inner-solve failure |
+| `theta` | APV sufficient-decrease factor for the KKT merit ($0 < \theta < 1$) |
+| `max_retry` | Maximum consecutive inner-failure $\mu$-increases before the step aborts |
+| `lambda_init` | Fallback multiplier estimate for the first load step (warm-start used thereafter) |
 | `tol_inner` | Inner Newton tolerance |
-| `tol_mult` | Outer multiplier-stagnation tolerance |
+| `tol_dep` | Outer tolerance on the plastic-strain-increment change $\\|\sum_\alpha \Delta\lambda^\alpha \boldsymbol{Z}^\alpha\\|$ (Taylor-invariant) |
 | `tol_compl` | Complementarity-gap tolerance $\max_\alpha |\lambda^\alpha_*\,s^\alpha_*|$ |
 | `tau_min` | Fraction-to-boundary safety factor (applied to $s^\alpha+\mu$, not $s^\alpha$) |
 | `k_max` | Maximum outer multiplier iterations |
