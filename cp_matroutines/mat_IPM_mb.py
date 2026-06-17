@@ -15,6 +15,14 @@ Implements the nested-loop MB-IPM following Polyak's nonlinear-rescaling approac
   - Convergence and the merit are measured on the plastic-strain increment, not
     the raw multipliers, so the Taylor (slip non-uniqueness) drift on degenerate
     active sets does not block convergence.
+  - Termination is measured in stress units, uniformly in the load-increment
+    size: the outer test is the natural (min-form) KKT residual
+    r_kkt = max_a |min(a_a * dgamma_a, -Phi_a)| < tol_phi, and the inner
+    residual norm scales R_s by the active-slip scale. Product-form criteria
+    (|lam*s| < tol, plain ||R|| < tol) certify only |Phi| <~ tol/dgamma and
+    degrade as the increments (and with them dgamma) shrink; the stress-unit
+    criteria bound the yield residual |Phi| < tol_phi directly at every step
+    size. See ipm_mb.md.
   - No bias on stress/tangent at convergence (exact KKT recovered)
 
 Derivatives of the yield function are computed via JAX automatic differentiation.
@@ -122,20 +130,25 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     theta     = float(config["theta"])
     max_retry = int(config["max_retry"])
     lam_init  = float(config["lambda_init"])
-    tol_inner = float(config["tol_inner"])
+    tol_phi   = float(config["tol_phi"])             # outer KKT tolerance in stress units (~ eps_phi * tau0)
+    theta_in  = float(config.get("theta_in", 1e-2))  # inner safety factor below tol_phi
+    theta_mu  = float(config.get("theta_mu", 1e-2))  # inner relaxation ~ theta_mu * mu in early sweeps
     tol_dep   = float(config["tol_dep"])
-    tol_compl = float(config["tol_compl"])
     tau_min   = float(config["tau_min"])
-    # Inner stall detection: break the inner Newton early when ||R|| fails to
-    # decrease by at least stall_rtol (relative) for stall_patience consecutive
-    # steps. On a warm start across an active-set change the inner solve can
-    # plateau far above tol_inner and burn all of max_inner before the 3b
-    # safeguard restarts; catching the stall early triggers that restart sooner.
+    # Inner stall detection: break the inner Newton early when the scaled
+    # residual fails to decrease by at least stall_rtol (relative) for
+    # stall_patience consecutive steps. On a warm start across an active-set
+    # change the inner solve can plateau far above the inner tolerance and burn
+    # all of max_inner before the 3b safeguard restarts; catching the stall
+    # early triggers that restart sooner.
     stall_patience = int(config.get("inner_stall_patience", 5))
     stall_rtol     = float(config.get("inner_stall_rtol", 1e-3))
     verbose   = config["verbose"]
     debug     = bool(config.get("debug", False))      # warn on primal-dual (lam_k vs dlambda) decoupling
     debug_tol = float(config.get("debug_tol", 1e-2))  # relative drift threshold for that warning
+    # Opt-in per-iteration tracer (single-step diagnostics only; see
+    # examples/ex_single_step.py). None => no recording, zero overhead.
+    trace = [] if config.get("trace", False) else None
 
     nSlip = len(mat.Za)
 
@@ -155,6 +168,24 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     def dPhi_fn(dg):
         return yield_jacobian(dg, eps_j, eps_p_n, gamma_n, C, Za, tau0, tau_inf, xi)
 
+    # Scaled inner residual (stress units). R_g = Phi + s is already a stress;
+    # R_s = dgamma*(s+mu) - mu*lam_k carries stress*slip, and a leftover R_s
+    # perturbs the slack by ds ~ R_s/dgamma -- the same 1/dgamma amplification
+    # that makes product-form tolerances increment-size dependent. Dividing
+    # R_s by the active-slip scale lam_bar converts it into the stress error
+    # it causes, so one stress-unit tolerance certifies the yield residual
+    # uniformly in the load-increment size. One shared scale (rather than
+    # per-component dgamma_a) avoids demanding absurd accuracy on inactive
+    # systems, where a small R_s perturbs nothing. np.maximum (not python max)
+    # so a NaN propagates into r and is caught by the isfinite safeguards.
+    lam_min = 1e-12   # floor guarding the division on barely-plastic steps
+
+    def scaled_residual(R_g, R_s, lam_k_, dlambda_):
+        lam_bar = float(np.maximum(np.maximum(jnp.max(lam_k_), jnp.max(dlambda_)),
+                                   lam_min))
+        return float(np.maximum(jnp.max(jnp.abs(R_g)),
+                                jnp.max(jnp.abs(R_s)) / lam_bar))
+
     # ==========================================================================
     # 1. Elastic predictor
     # ==========================================================================
@@ -166,6 +197,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         hist_el = hist.copy()
         hist_el["C_ep"]  = np.array(C)
         hist_el["yield"] = np.array(Phi_trial)
+        hist_el["trace"] = trace
         return np.array(sig_trial), hist_el, 0
 
     # ==========================================================================
@@ -185,8 +217,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     Phi = Phi_fn(dlambda)
     R_g = Phi + slacks
     R_s = dlambda * (slacks + mu) - mu * lam_k
-    R   = jnp.concatenate([R_g, R_s])
-    r   = float(jnp.linalg.norm(R))
+    r   = scaled_residual(R_g, R_s, lam_k, dlambda)
 
     total_newton_iter = 0
     converged  = False
@@ -203,10 +234,17 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         # 3a. Inner Newton solve at fixed (mu, lam_k)
         # ----------------------------------------------------------------------
         dgam_prev = dlambda   # primal slip before this outer step (for dep_norm)
+        # Adaptive inner tolerance (stress units). theta_in*tol_phi keeps the
+        # inner-solve contamination a fixed factor below the outer target
+        # tol_phi; theta_mu*mu relaxes early sweeps, where lam_k is still far
+        # from converged and polishing the inner solve beyond the O(mu) move
+        # of the next Polyak update is wasted work. As the APV lowers mu, the
+        # inner tolerance tightens automatically toward theta_in*tol_phi.
+        tol_in = max(theta_in * tol_phi, theta_mu * mu)
         n = 0
-        r_best = r            # best (lowest) ||R|| seen this inner solve
-        stall  = 0            # consecutive steps without sufficient ||R|| decrease
-        while r > tol_inner and n < max_inner:
+        r_best = r            # best (lowest) scaled residual seen this inner solve
+        stall  = 0            # consecutive steps without sufficient decrease
+        while r > tol_in and n < max_inner:
             dPhi = dPhi_fn(dlambda)
 
             # Schur complement: eliminate d_slacks from the 2m x 2m system.
@@ -240,16 +278,30 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             Phi = Phi_fn(dlambda)
             R_g = Phi + slacks
             R_s = dlambda * (slacks + mu) - mu * lam_k
-            R   = jnp.concatenate([R_g, R_s])
-            r   = float(jnp.linalg.norm(R))
+            r   = scaled_residual(R_g, R_s, lam_k, dlambda)
 
             compl_gap = float(jnp.max(jnp.abs(dlambda * slacks)))
-
-            print(f"OUT - cond: {k},{mu:.2e},{compl_gap:.2e},{np.linalg.cond(M):.2e}")
 
             total_increment = float(jnp.linalg.norm(alpha_max * jnp.concatenate([d_dlambda, d_slacks])))
 
-            compl_gap = float(jnp.max(jnp.abs(dlambda * slacks)))
+            # Per-iteration diagnostics (single-step tracer only). cond_solved is
+            # the Schur-complement M that is actually solved; cond_kkt is the full
+            # 2m x 2m primal-dual matrix, assembled here so it is directly
+            # comparable to the classical IPM trace.
+            if trace is not None:
+                I_m   = jnp.eye(nSlip)
+                J_kkt = jnp.block([[dPhi, I_m],
+                                   [jnp.diag(slacks + mu), jnp.diag(dlambda)]])
+                trace.append({
+                    "iter": total_newton_iter + 1, "k": k, "n": n + 1,
+                    "mu": mu, "r_abs": r, "r_rel": r,
+                    "compl_gap": compl_gap,
+                    "cond_solved": float(jnp.linalg.cond(M)),
+                    "cond_kkt": float(jnp.linalg.cond(J_kkt)),
+                    "alpha": float(alpha_max),
+                    "n_active": int(np.sum(np.array(dlambda) > 1e-10)),
+                })
+
             if verbose:
                 print(f"    n={n}: r={r:.2e} compl={compl_gap:.2e}, step={total_increment:.2e}")
 
@@ -259,7 +311,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             # Stall detection (relevant on warm starts across active-set changes):
             # if ||R|| has not dropped by at least stall_rtol relative to the best
             # value seen for stall_patience consecutive steps, the inner solve is
-            # plateauing well above tol_inner. Break out so the 3b safeguard can
+            # plateauing well above tol_in. Break out so the 3b safeguard can
             # restart at a wider mu now rather than after exhausting max_inner.
             if not np.isfinite(r) or r > (1.0 - stall_rtol) * r_best:
                 stall += 1
@@ -288,11 +340,12 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         #     (Note: nan fails every '>' test, so it must be caught explicitly or
         #     it traps the outer loop until k_max.)
         # ----------------------------------------------------------------------
-        if (not np.isfinite(r)) or r > tol_inner:
+        if (not np.isfinite(r)) or r > tol_in:
             if mu >= mu_ceil or retries >= max_retry:
                 if verbose:
                     print(f"  MB-IPM: inner Newton failed at outer k={k}, "
                           f"mu={mu:.2e} (ceil/retries spent), ||R||={r:.2e}")
+                hist["trace"] = trace
                 return np.zeros((3, 3)), hist, -1
             mu       = min(mu * mu_inc, mu_ceil)  # enlarge feasible band
             mu_lo    = mu                         # APV must not undo the raise
@@ -303,8 +356,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             Phi = Phi_fn(dlambda)
             R_g = Phi + slacks
             R_s = dlambda * (slacks + mu) - mu * lam_k
-            R   = jnp.concatenate([R_g, R_s])
-            r   = float(jnp.linalg.norm(R))
+            r   = scaled_residual(R_g, R_s, lam_k, dlambda)
             if verbose:
                 print(f"  MB-IPM k={k}: inner stall -> cold restart at mu={mu:.2e} "
                       f"(retry {retries}/{max_retry})")
@@ -325,13 +377,13 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         #   between them is exactly the inner residual in multiplier space,
         #       dlambda - lam_k_new = R_s / (slacks + mu),
         #   so it is non-zero only because the inner solve was stopped early.
-        #   It matters because compl_gap (3c, below) is built from lam_k_new, not
-        #   dlambda: when the inner solve is too loose for the current mu, lam_k
-        #   decouples from the slip and collapses toward 0 over the warm-started
-        #   steps, making compl_gap = mu*|lam_k_new - lam_k| vanish for the wrong
-        #   reason while the true gap max|dlambda*Phi| stays at the inner-residual
-        #   level. Diagnostic only -- it changes nothing, just warns. Compare the
-        #   reported drift against the inner-loop primal compl = max|dlambda*s|.
+        #   Since the outer convergence test (3d) is built from the *primal*
+        #   slip dlambda (natural KKT residual), this drift can no longer make
+        #   the convergence test pass for the wrong reason; it remains useful
+        #   as a diagnostic that the inner solve is loose relative to the
+        #   current mu. Note that under the adaptive inner tolerance
+        #   (tol_in ~ theta_mu*mu) some drift in *early* outer sweeps is
+        #   expected and harmless. Diagnostic only -- changes nothing.
         # ----------------------------------------------------------------------
         if debug:
             slip_scale = float(jnp.max(jnp.abs(dlambda)))            # active-slip scale
@@ -340,8 +392,9 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             if rel_drift > debug_tol:
                 print(f"  [debug] MB-IPM k={k}: Polyak update decoupled from "
                       f"primal slip by {rel_drift:.2e} (> {debug_tol:.0e}); inner "
-                      f"solve too loose for mu={mu:.2e} -> compl_gap unreliable "
-                      f"(||R||={r:.2e}, min lam_k_new={float(jnp.min(lam_k_new)):.2e}).")
+                      f"solve loose for mu={mu:.2e} (expected in early sweeps "
+                      f"under tol_in={tol_in:.2e}; r={r:.2e}, "
+                      f"min lam_k_new={float(jnp.min(lam_k_new)):.2e}).")
 
         # Outer-progress measure: the change in the plastic-strain increment over
         # this outer step, ||sum_a (dgamma_a - dgamma_prev_a) Z_a||, built from
@@ -356,36 +409,53 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         # See ipm_mb.md.
         d_eps_p   = jnp.einsum('a,aij->ij', dlambda - dgam_prev, Za)
         dep_norm  = float(jnp.linalg.norm(d_eps_p))
-        compl_gap = float(jnp.max(jnp.abs(lam_k_new * slacks)))
         merit     = dep_norm
+
+        # Natural (min-form) KKT residual in stress units, built from the
+        # *primal* slip dlambda (not lam_k -- immune to the 3c' decoupling).
+        # For scalars: min(a, b) = 0  <=>  a >= 0, b >= 0, a*b = 0, so r_kkt
+        # measures the distance to the exact KKT point. The diagonal
+        # a_diag = -diag(dPhi/ddgamma) > 0 converts slip to stress so the min
+        # compares like with like: on active systems (s -> 0) it bounds the
+        # yield residual |Phi| directly; on inactive systems it bounds the
+        # stress polluted by spurious slip, a*dgamma; a yield violation
+        # Phi > 0 (transiently admissible up to mu in the MB setting) makes
+        # the min negative and is flagged by the abs. Unlike the product gap
+        # |lam*s| < tol -- which certifies only |Phi| <~ tol/dgamma and
+        # degrades as the load increments shrink -- r_kkt < tol_phi bounds the
+        # stress error uniformly in the increment size. See ipm_mb.md.
+        a_diag = -jnp.diag(dPhi_fn(dlambda))
+        r_kkt  = float(jnp.max(jnp.abs(jnp.minimum(a_diag * dlambda, -Phi))))
 
         lam_k = lam_k_new
 
         if verbose:
             print(f"  MB-IPM k={k}: mu={mu:.2e}, delta_lam={mult_change:.2e}, "
-                  f"compl={compl_gap:.2e}, dep={dep_norm:.2e}, "
-                  f"||R||={r:.2e}, n_inner={n}")
+                  f"kkt={r_kkt:.2e}, dep={dep_norm:.2e}, "
+                  f"r={r:.2e}, n_inner={n}")
 
         # ----------------------------------------------------------------------
         # 3d. Outer convergence check: plastic-strain increment settled AND
-        #     complementary. Using dep_norm (not the raw multiplier change)
-        #     filters out the Taylor-ambiguous slip drift. See ipm_mb.md.
+        #     exact KKT satisfied to tol_phi (stress units). Using dep_norm
+        #     (not the raw multiplier change) filters out the Taylor-ambiguous
+        #     slip drift. See ipm_mb.md.
         # ----------------------------------------------------------------------
-        if dep_norm < tol_dep and compl_gap < tol_compl:
+        if dep_norm < tol_dep and r_kkt < tol_phi:
             converged = True
             break
 
         # ----------------------------------------------------------------------
         # 3e. mu update.
         #   (i) Complementarity polish. If the stress has settled (dep < tol_dep)
-        #       but the gap is still above tol_compl, the active set is fixed and
-        #       the residual yield is |Phi| = |s| ~ mu * (multiplier drift), so the
-        #       gap |lam*s| scales ~linearly with mu. Shrinking mu therefore drives
-        #       it down. This is safe to do *below* mu_lo: with no active-set
-        #       transition in progress every active slack sits at s ~ +mu (and the
-        #       inactive ones at s >> 0), so none is near the shifted boundary
-        #       s = -mu and the blow-up that forced the earlier mu-raise cannot
-        #       recur. One decade of reduction is usually enough.
+        #       but r_kkt is still above tol_phi, the active set is fixed and
+        #       the residual yield is |Phi| = |s| ~ mu * (multiplier drift), so
+        #       the active branch of r_kkt scales ~linearly with mu. Shrinking
+        #       mu therefore drives it down. This is safe to do *below* mu_lo:
+        #       with no active-set transition in progress every active slack
+        #       sits at s ~ +mu (and the inactive ones at s >> 0), so none is
+        #       near the shifted boundary s = -mu and the blow-up that forced
+        #       the earlier mu-raise cannot recur. One decade of reduction is
+        #       usually enough.
         #   (ii) Otherwise, APV stall-tightening: tighten mu when the merit (the
         #       plastic-strain-increment change) stalls -- smaller mu => faster
         #       outer rate C = mu/(mu + a*lam*) -- bounded below by mu_lo.
@@ -402,8 +472,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         # Recompute residual with updated (lam_k, mu, slacks)
         R_g = Phi + slacks
         R_s = dlambda * (slacks + mu) - mu * lam_k
-        R   = jnp.concatenate([R_g, R_s])
-        r   = float(jnp.linalg.norm(R))
+        r   = scaled_residual(R_g, R_s, lam_k, dlambda)
 
     # ==========================================================================
     # 4. Post-processing
@@ -411,6 +480,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     if not converged:
         if verbose:
             print(f"WARNING: MB-IPM did not converge in {k_max} outer iterations.")
+        hist["trace"] = trace
         return np.zeros((3, 3)), hist, -1
 
     eps_p_new = eps_p_n + jnp.einsum('a,aij->ij', dlambda, Za)
@@ -432,5 +502,6 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     C_ep = compute_tangent_IFT_mb(dlambda, lam_k, eps_j, eps_p_n, gamma_n, C, Za,
                                    tau0, tau_inf, xi, mu)
     new_hist["C_ep"] = np.array(C_ep)
+    new_hist["trace"] = trace
 
     return np.array(sig), new_hist, total_newton_iter

@@ -184,6 +184,9 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     delta     = config["delta"]
     tau_min   = config["tau_min"]
     verbose   = config["verbose"]
+    # Opt-in per-iteration tracer (single-step diagnostics only; see
+    # examples/ex_single_step.py). None => no recording, zero overhead.
+    trace = [] if config.get("trace", False) else None
 
     nSlip = len(mat.Za)
 
@@ -216,6 +219,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         hist_el = hist.copy()
         hist_el["C_ep"] = np.array(C)
         hist_el["yield"] = np.array(Phi_trial)
+        hist_el["trace"] = trace
         return np.array(sig_trial), hist_el, 0
 
     # ======================================================================
@@ -275,22 +279,36 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             dlambda = dlambda + alpha_max * d_dlambda
             slacks = slacks + alpha_max * d_slacks
 
-            print(f"OUT - cond: {k},{mu:.2e},{np.linalg.norm(dlambda*slacks)},{np.linalg.cond(J):.2e}")
-
             # Recompute residual
             R_g = Phi_fn(dlambda) + slacks
             R_s = dlambda * slacks - mu
             R   = jnp.concatenate([R_g, R_s])
-            r   = float(jnp.linalg.norm(R)) /r0
+            r_abs = float(jnp.linalg.norm(R))
+            r   = r_abs / r0
 
             #increase counters
             n += 1
             total_newton_iter += 1
 
+            # Per-iteration diagnostics (single-step tracer only). The solved
+            # system here is already the full 2m x 2m primal-dual matrix J, so
+            # cond_solved and cond_kkt coincide.
+            if trace is not None:
+                cond_J = float(jnp.linalg.cond(J))
+                trace.append({
+                    "iter": total_newton_iter, "k": k, "n": n,
+                    "mu": mu, "r_abs": r_abs, "r_rel": r,
+                    "compl_gap": float(jnp.max(jnp.abs(dlambda * slacks))),
+                    "cond_solved": cond_J, "cond_kkt": cond_J,
+                    "alpha": float(alpha_max),
+                    "n_active": int(np.sum(np.array(dlambda) > 1e-10)),
+                })
+
         # check for Newton divergence
         if n >= max_inner:
             if verbose:
                 print(f"  IPM failed to converge for mu = {mu:.2e} after {n} Newton iterations.")
+            hist["trace"] = trace
             return np.zeros((3, 3)), hist, -1
 
         if mu <= mu_end and r < tol_end:
@@ -324,6 +342,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     if not converged:
         if verbose:
             print("WARNING: IPM did not converge to the desired tolerance.")
+        hist["trace"] = trace
         return np.zeros((3, 3)), hist, -1
 
     # Update history
@@ -339,5 +358,6 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     C_ep = compute_tangent_IFT(dlambda, eps_j, eps_p_n, gamma_n, C, Za,
                                tau0, tau_inf, xi, mu)
     new_hist["C_ep"] = np.array(C_ep)
+    new_hist["trace"] = trace
 
     return np.array(sig), new_hist, total_newton_iter

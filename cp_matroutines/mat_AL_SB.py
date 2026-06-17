@@ -2,11 +2,37 @@
 Augmented Lagrangian method for rate-independent single crystal plasticity
 at small strains (Schmidt-Baldassari 2003).
 
-Implements the semi-smooth Newton AL algorithm from doc/al.md:
+Implements the *classic* augmented Lagrangian algorithm (Algorithm 1) exactly
+as stated in the reference paper, so results can be cited against it directly:
+
+  1: initialise i = 0, dlambda^(0) = 0, eta^(0) (penalty)
+  2: while i <= i_max:                                   (fixed-point / penalty loop)
+  3:     while ||R||_2 > eps_min:                        (semi-smooth Newton loop)
+  4:         solve R^a(dlambda^(i+1)) = 0  (Eq. 17, Jacobian Eq. 18)
+  5:         (line search / damping -- optional, not used here: full Newton step)
+  6:     end while
+  7:     if Phi^a <= eps_c and dlambda^a >= -eps_c and |Phi^a dlambda^a| <= eps_c
+         for all a:                                       (KKT check, product form)
+  8:         converged, exit
+  9:     else:
+ 10:         implicit multiplier update (reference dlambda_i <- dlambda)
+ 11:         eta^(i+1) = 2 eta^(i), i <- i + 1
+ 12:     end if
+ 13: end while
+
   - Residual: R^alpha = dgamma^alpha - max(0, dgamma^alpha + eta * Phi^alpha)
-  - Active set determines piecewise Jacobian for Newton linearisation
-  - Outer loop doubles eta if KKT complementarity conditions are not met
-  - Consistent tangent via the implicit function theorem with JAX AD
+  - Active set determines the piecewise Jacobian for the Newton linearisation.
+  - Inner convergence on the residual 2-norm ||R||_2 < eps_min (Alg. 1, line 3).
+  - Outer convergence on the KKT conditions in *product* form (Alg. 1, line 7):
+    primal feasibility Phi <= eps_c, dual feasibility dlambda >= -eps_c, and the
+    product complementarity |Phi * dlambda| <= eps_c. Note that the product gap
+    certifies the yield residual only as |Phi| <~ eps_c / dlambda, so its
+    stress-unit accuracy is not uniform in the load-increment size -- this is
+    the paper's stated criterion; the increment-uniform natural (min-form)
+    residual is available instead in mat_IPM_mb.py / mat_AL_SB_converged.py.
+  - Consistent tangent via the implicit function theorem with JAX AD.
+
+Derivatives of the yield function are computed via JAX automatic differentiation.
 """
 
 import numpy as np
@@ -70,8 +96,9 @@ def compute_tangent_IFT_al(dlambda, eps_j, eps_p_n, gamma_n, C, Za,
 def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
                    config: dict) -> tuple[np.ndarray, dict, int]:
     r"""
-    Compute the Cauchy stress via the Augmented Lagrangian method for
-    rate-independent single crystal plasticity at small strains.
+    Compute the Cauchy stress via the classic Augmented Lagrangian algorithm
+    (Algorithm 1) for rate-independent single crystal plasticity at small
+    strains.
 
     Parameters
     ----------
@@ -88,12 +115,19 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     """
 
     # -- Unpack config -------------------------------------------------------
-    eta_init  = config["eta_init"]
-    max_outer = config["max_outer"]
-    max_inner = config["max_inner"]
-    tol_inner = config["tol_inner"]
-    tol_kkt   = config["tol_kkt"]
-    verbose   = config["verbose"]
+    eta_init  = float(config["eta_init"])
+    max_outer = int(config["max_outer"])
+    max_inner = int(config["max_inner"])
+    # eps_c : KKT-check tolerance (Alg. 1, line 7). eps_min : inner Newton
+    # residual tolerance (Alg. 1, line 3). Fall back to the previous key names
+    # (tol_phi / theta_in) so existing configs keep working.
+    eps_c   = float(config.get("eps_c", config.get("tol_phi", 1e-10)))
+    eps_min = float(config.get("eps_min",
+                               float(config.get("theta_in", 1e-1)) * eps_c))
+    verbose = config["verbose"]
+    # Opt-in per-iteration tracer (single-step diagnostics only; see
+    # examples/ex_single_step.py). None => no recording, zero overhead.
+    trace = [] if config.get("trace", False) else None
 
     nSlip = len(mat.Za)
 
@@ -124,70 +158,108 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         hist_el = hist.copy()
         hist_el["C_ep"] = np.array(C)
         hist_el["yield"] = np.array(Phi_trial)
+        hist_el["trace"] = trace
         return np.array(sig_trial), hist_el, 0
 
     # ========================================================================
-    # 2.  Initialisation
+    # 2.  Initialisation (Algorithm 1, line 1)
     # ========================================================================
     dlambda = jnp.zeros(nSlip)
-    eta = float(eta_init)
+    eta = eta_init
     total_newton_iter = 0
     converged = False
 
     # ========================================================================
-    # 3.  Outer penalty loop
+    # 3.  Fixed-point / penalty loop (Algorithm 1, line 2)
     # ========================================================================
     for outer in range(max_outer):
-        inner_converged = False
-        n_inner = 0
 
-        # Reference point fixed for the duration of this inner loop
-        # (mirrors dlambda_i in the Julia implementation)
+        # Multiplier reference for this inner solve. Updated to the current
+        # iterate at the start of every outer step -- this is the implicit
+        # update of Algorithm 1, line 10.
         dlambda_i = dlambda
 
         # --------------------------------------------------------------------
-        # Semi-smooth Newton loop for current eta
+        # 3a. Semi-smooth Newton loop: iterate while ||R||_2 > eps_min
+        #     (Algorithm 1, line 3).
         # --------------------------------------------------------------------
-        for n_inner in range(max_inner):
+        inner_converged = False
+        inner_steps = 0
+        for _ in range(max_inner):
             Phi  = Phi_fn(dlambda)
             dPhi = dPhi_fn(dlambda)
 
-            # Active set uses the fixed reference dlambda_i plus current Phi
+            # Active set uses the fixed reference dlambda_i plus current Phi.
             active = (dlambda_i + eta * Phi) > 0.0
 
             # FF = I for inactive rows; FF = I - eta * dPhi for active rows
-            # (direct translation of the Julia FF construction)
+            # (the piecewise semi-smooth Newton Jacobian, Eq. 18).
             FF = jnp.where(active[:, None], jnp.eye(nSlip) - eta * dPhi, jnp.eye(nSlip))
 
-            # Residual uses the fixed reference dlambda_i
+            # Residual R^a = dlambda^a - max(0, dlambda_i^a + eta * Phi^a).
             R = dlambda - jnp.maximum(0.0, dlambda_i + eta * Phi)
+            res_norm = float(jnp.linalg.norm(R))
 
-            # Newton step: FF * ddlambda = -R
-            ddlambda = jnp.linalg.solve(FF, -R)
-            dlambda = dlambda + ddlambda
-
-            total_newton_iter += 1
-
-            if float(jnp.linalg.norm(ddlambda)) < tol_inner:
+            # Inner convergence test (Algorithm 1, line 3, loop condition).
+            if not np.isfinite(res_norm):
+                break
+            if res_norm < eps_min:
                 inner_converged = True
                 break
 
-        if not inner_converged and verbose:
-            print(f"  AL outer {outer + 1}: inner Newton did not converge "
-                  f"in {max_inner} iterations.")
+            # Newton step: FF * ddlambda = -R   (Eq. 17). Full step; line 5's
+            # line search / damping is optional and not used here.
+            ddlambda = jnp.linalg.solve(FF, -R)
+            dlambda  = dlambda + ddlambda
 
-        # Check KKT complementarity: dlambda^alpha * Phi^alpha = 0 for all alpha
-        Phi_cur = Phi_fn(dlambda)
-        kkt = float(jnp.linalg.norm(dlambda * Phi_cur))
+            total_newton_iter += 1
+            inner_steps += 1
+
+            # Per-iteration diagnostics (single-step tracer only). AL has no
+            # primal-dual barrier system; the solved matrix is the m x m
+            # semi-smooth Newton matrix FF, so cond_solved and cond_kkt both
+            # report cond(FF). The continuation parameter is the penalty eta
+            # (grows), not a barrier mu. r_abs is the inner residual norm
+            # ||R||_2 (AL's inner convergence metric, Alg. 1 line 3). compl_gap
+            # is the product gap max_a |dlambda_a * Phi_a| -- the same quantity
+            # the KKT check (line 7) tests, and comparable to the IPM traces.
+            if trace is not None:
+                Phi_new = Phi_fn(dlambda)
+                cond_FF = float(jnp.linalg.cond(FF))
+                trace.append({
+                    "iter": total_newton_iter, "k": outer, "n": inner_steps,
+                    "eta": eta, "r_abs": res_norm, "r_rel": res_norm,
+                    "compl_gap": float(jnp.max(jnp.abs(dlambda * Phi_new))),
+                    "cond_solved": cond_FF, "cond_kkt": cond_FF,
+                    "alpha": 1.0,
+                    "n_active": int(np.sum(np.array(dlambda) > 1e-10)),
+                })
+
+        if not inner_converged and verbose:
+            print(f"  AL outer {outer + 1}: inner Newton did not reach "
+                  f"||R||_2 < {eps_min:.1e} in {max_inner} iterations.")
+
+        # --------------------------------------------------------------------
+        # 3b. KKT check in product form (Algorithm 1, line 7):
+        #     Phi^a <= eps_c  and  dlambda^a >= -eps_c  and
+        #     |Phi^a * dlambda^a| <= eps_c  for all a.
+        # --------------------------------------------------------------------
+        Phi_cur   = Phi_fn(dlambda)
+        kkt_feas  = float(jnp.max(Phi_cur))                       # primal: want <= eps_c
+        kkt_dual  = float(jnp.min(dlambda))                       # dual:   want >= -eps_c
+        kkt_compl = float(jnp.max(jnp.abs(Phi_cur * dlambda)))    # complementarity: want <= eps_c
 
         if verbose:
             print(f"  AL outer {outer + 1}: eta = {eta:.2e}, "
-                  f"KKT = {kkt:.2e}, Newton iters = {n_inner + 1}")
+                  f"max Phi = {kkt_feas:.2e}, min dlambda = {kkt_dual:.2e}, "
+                  f"max|Phi*dlambda| = {kkt_compl:.2e}, "
+                  f"Newton iters = {inner_steps}")
 
-        if kkt < tol_kkt:
+        if (kkt_feas <= eps_c) and (kkt_dual >= -eps_c) and (kkt_compl <= eps_c):
             converged = True
             break
 
+        # Otherwise: double the penalty and continue (Algorithm 1, line 11).
         eta *= 2.0
 
     # ========================================================================
@@ -196,6 +268,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     if not converged:
         if verbose:
             print("WARNING: AL did not converge.")
+        hist["trace"] = trace
         return np.zeros((3, 3)), hist, -1
 
     eps_p_new = eps_p_n + jnp.einsum('a,aij->ij', dlambda, Za)
@@ -215,5 +288,6 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     C_ep = compute_tangent_IFT_al(dlambda, eps_j, eps_p_n, gamma_n, C, Za,
                                    tau0, tau_inf, xi, eta)
     new_hist["C_ep"] = np.array(C_ep)
+    new_hist["trace"] = trace
 
     return np.array(sig), new_hist, total_newton_iter
