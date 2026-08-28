@@ -125,6 +125,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         hist_el = hist.copy()
         hist_el["yield"] = np.array(tau_trial - tau0)
         hist_el["trace"] = trace
+        hist_el["cond_final"] = np.nan      # no Newton system solved
         return np.array(sig_trial), hist_el, 0
 
     # ======================================================================
@@ -183,6 +184,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         if verbose:
             print(f"  VP Newton did not converge after {max_iter} iterations, ||r|| = {r_norm:.2e}")
         hist["trace"] = trace
+        hist["cond_final"] = np.nan
         return np.zeros((3, 3)), hist, -1
 
     # ======================================================================
@@ -200,5 +202,22 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     tau = jnp.einsum('aij,ij->a', Za, sig)
     new_hist["yield"] = np.array(tau - tau0)
     new_hist["trace"] = trace
+
+    # Conditioning of the final Newton Jacobian dR/ddgamma 
+    dR_final = dR_fn(dgamma)
+    new_hist["cond_final"] = float(jnp.linalg.cond(dR_final))
+
+    # Final Newton system exported
+    if trace is not None:
+        dPhi_final = -jnp.einsum('aij,ijkl,bkl->ab', Za, C, Za)
+        new_hist["newton_final"] = {
+            "solved":  np.array(dR_final),
+            "kkt":     np.array(dR_final),
+            "dPhi":    np.array(dPhi_final),
+            "dlambda": np.array(dgamma),
+            "Phi":     np.array(tau - tau0),
+            "eta":     float(eta),
+            "dgamma0": float(dgamma0),
+        }
 
     return np.array(sig), new_hist, n_iter

@@ -6,6 +6,7 @@ compute_stress function and its solver-specific config section.
 from cp_matroutines.mat_IPM_classic import compute_stress as _ipm_classic
 from cp_matroutines.mat_IPM_adaptive_mu import compute_stress as _ipm_adaptive_mu
 from cp_matroutines.mat_IPM_mb import compute_stress as _ipm_mb
+from cp_matroutines.mat_IPM_mb_classic import compute_stress as _ipm_mb_classic
 from cp_matroutines.mat_VP import compute_stress as _vp
 from cp_matroutines.mat_AL_SB import compute_stress as _al_sb
 from cp_matroutines.mat_AL_SB_converged import compute_stress as _al_sb_conv
@@ -14,6 +15,8 @@ _SOLVERS = {
     "IPM_classic": (_ipm_classic, "IPM"),
     "IPM_amu":     (_ipm_adaptive_mu, "IPM"),
     "IPM_mb":      (_ipm_mb, "MB_IPM"),
+    "MB-IPM-classic": (_ipm_mb_classic, "MB_IPM_classic"),   # classic implementation from my paper
+    "IPM_mb_classic": (_ipm_mb_classic, "MB_IPM_classic"),   # alias, underscore spelling
     "VP":          (_vp,  "VP"),
     "AL":          (_al_sb, "AL"),
     "AL_conv":     (_al_sb_conv, "AL"),   # AL iterated to numerical precision (flat in load increment)

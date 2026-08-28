@@ -103,9 +103,10 @@ for i, scale in enumerate(np.linspace(0, 1, n_steps + 1)):
     with open(os.path.join(out_dir, "sigma.csv"), "a") as f:
         f.write(f"{shear}," + ",".join(map(str, vsig)) + "\n")
 
-    # output total Newton iterations
+    # output total Newton iterations and the conditioning of the final Jacobian
+    cond = hist.get("cond_final", float("nan"))
     with open(os.path.join(out_dir, "newton.csv"), "a") as f:
-        f.write(f"{shear},{n_iter}\n")
+        f.write(f"{shear},{n_iter},{cond}\n")
 
     # output yield function values
     with open(os.path.join(out_dir, "yield.csv"), "a") as f:

@@ -159,6 +159,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         hist_el["C_ep"] = np.array(C)
         hist_el["yield"] = np.array(Phi_trial)
         hist_el["trace"] = trace
+        hist_el["cond_final"] = np.nan      # no Newton system solved
         return np.array(sig_trial), hist_el, 0
 
     # ========================================================================
@@ -269,6 +270,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         if verbose:
             print("WARNING: AL did not converge.")
         hist["trace"] = trace
+        hist["cond_final"] = np.nan
         return np.zeros((3, 3)), hist, -1
 
     eps_p_new = eps_p_n + jnp.einsum('a,aij->ij', dlambda, Za)
@@ -289,5 +291,24 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
                                    tau0, tau_inf, xi, eta)
     new_hist["C_ep"] = np.array(C_ep)
     new_hist["trace"] = trace
+
+    # Conditioning of the final semi-smooth Newton matrix at the converged iterates
+    dPhi_final   = dPhi_fn(dlambda)
+    active_final = (dlambda_i + eta * Phi_cur) > 0.0
+    FF_final     = jnp.where(active_final[:, None],
+                             jnp.eye(nSlip) - eta * dPhi_final, jnp.eye(nSlip))
+    new_hist["cond_final"] = float(jnp.linalg.cond(FF_final))
+
+    # Final Newton system exported f
+    if trace is not None:
+        new_hist["newton_final"] = {
+            "solved":  np.array(FF_final),
+            "kkt":     np.array(FF_final),
+            "dPhi":    np.array(dPhi_final),
+            "dlambda": np.array(dlambda),
+            "Phi":     np.array(Phi_cur),
+            "active":  np.array(active_final),
+            "eta":     float(eta),
+        }
 
     return np.array(sig), new_hist, total_newton_iter

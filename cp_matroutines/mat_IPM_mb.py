@@ -115,7 +115,12 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     Returns
     -------
     sig      : (3,3) array — Cauchy stress tensor
-    new_hist : dict — updated material history
+    new_hist : dict — updated material history. Contains "cond_final", the
+               2-norm condition number of the full 2m x 2m primal-dual KKT
+               Jacobian at the converged iterate (comparable to the classical
+               IPM), and "cond_final_solved", the same for the m x m Schur
+               complement M that is actually solved here. Both are NaN if the
+               step was purely elastic, i.e. no Newton system was solved.
     n_iter   : int — total Newton iterations (-1 on failure)
     """
 
@@ -198,6 +203,8 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         hist_el["C_ep"]  = np.array(C)
         hist_el["yield"] = np.array(Phi_trial)
         hist_el["trace"] = trace
+        hist_el["cond_final"]        = np.nan   # no Newton system solved
+        hist_el["cond_final_solved"] = np.nan
         return np.array(sig_trial), hist_el, 0
 
     # ==========================================================================
@@ -346,6 +353,8 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
                     print(f"  MB-IPM: inner Newton failed at outer k={k}, "
                           f"mu={mu:.2e} (ceil/retries spent), ||R||={r:.2e}")
                 hist["trace"] = trace
+                hist["cond_final"]        = np.nan
+                hist["cond_final_solved"] = np.nan
                 return np.zeros((3, 3)), hist, -1
             mu       = min(mu * mu_inc, mu_ceil)  # enlarge feasible band
             mu_lo    = mu                         # APV must not undo the raise
@@ -481,6 +490,8 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         if verbose:
             print(f"WARNING: MB-IPM did not converge in {k_max} outer iterations.")
         hist["trace"] = trace
+        hist["cond_final"]        = np.nan
+        hist["cond_final_solved"] = np.nan
         return np.zeros((3, 3)), hist, -1
 
     eps_p_new = eps_p_n + jnp.einsum('a,aij->ij', dlambda, Za)
@@ -503,5 +514,18 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
                                    tau0, tau_inf, xi, mu)
     new_hist["C_ep"] = np.array(C_ep)
     new_hist["trace"] = trace
+
+    # Conditioning of the final Newton matrices at the converged iterate,
+    # re-assembled here (the inner loop's matrices are formed at the pre-update
+    # iterate, and the outer loop can exit without an inner step). As in the
+    # tracer: cond_final_solved is the Schur complement M actually solved,
+    # cond_final the full 2m x 2m primal-dual matrix, so it is directly
+    # comparable to the classical IPM.
+    dPhi_final = dPhi_fn(dlambda)
+    M_final    = jnp.diag(slacks + mu) - jnp.diag(dlambda) @ dPhi_final
+    J_final    = jnp.block([[dPhi_final, jnp.eye(nSlip)],
+                            [jnp.diag(slacks + mu), jnp.diag(dlambda)]])
+    new_hist["cond_final_solved"] = float(jnp.linalg.cond(M_final))
+    new_hist["cond_final"]        = float(jnp.linalg.cond(J_final))
 
     return np.array(sig), new_hist, total_newton_iter

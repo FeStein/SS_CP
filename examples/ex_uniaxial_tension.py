@@ -127,7 +127,8 @@ for i, scale in enumerate(np.linspace(0, 1, n_steps + 1)):
     with open(os.path.join(out_dir, "sigma.csv"), "a") as f:
         f.write(f"{eps_11}," + ",".join(map(str, vsig)) + "\n")
 
+    cond = hist.get("cond_final", float("nan"))
     with open(os.path.join(out_dir, "newton.csv"), "a") as f:
-        f.write(f"{eps_11},{n_inner},{g_iter}\n")
+        f.write(f"{eps_11},{n_inner},{g_iter},{cond}\n")
 
 print("\nSimulation completed. Results saved in 'out_uniaxial/' directory.")

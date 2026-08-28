@@ -88,7 +88,7 @@ def _run_orientation(args: tuple) -> tuple[int, bool]:
         gamma12 = gamma24_to_12(hist["gamma_a"])
         gamma_rows.append(  f"{shear}," + ",".join(map(str, gamma12)))
         sigma_rows.append(  f"{shear}," + ",".join(map(str, ten2voigt(sig))))
-        newton_rows.append( f"{shear},{n_iter}")
+        newton_rows.append( f"{shear},{n_iter},{hist.get('cond_final', float('nan'))}")
         yield_rows.append(  f"{shear}," + ",".join(map(str, hist["yield"])))
 
     for filename, rows in [

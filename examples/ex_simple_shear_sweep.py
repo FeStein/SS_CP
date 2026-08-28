@@ -126,8 +126,9 @@ for idx, value in enumerate(values):
         with open(os.path.join(out_dir, "sigma.csv"), "a") as f:
             f.write(f"{shear}," + ",".join(map(str, vsig)) + "\n")
 
+        cond = hist.get("cond_final", float("nan"))
         with open(os.path.join(out_dir, "newton.csv"), "a") as f:
-            f.write(f"{shear},{n_iter}\n")
+            f.write(f"{shear},{n_iter},{cond}\n")
 
         with open(os.path.join(out_dir, "yield.csv"), "a") as f:
             f.write(f"{shear}," + ",".join(map(str, hist["yield"])) + "\n")

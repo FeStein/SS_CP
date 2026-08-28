@@ -220,6 +220,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         hist_el["C_ep"] = np.array(C)
         hist_el["yield"] = np.array(Phi_trial)
         hist_el["trace"] = trace
+        hist_el["cond_final"] = np.nan      # no Newton system solved
         return np.array(sig_trial), hist_el, 0
 
     # ======================================================================
@@ -309,6 +310,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             if verbose:
                 print(f"  IPM failed to converge for mu = {mu:.2e} after {n} Newton iterations.")
             hist["trace"] = trace
+            hist["cond_final"] = np.nan
             return np.zeros((3, 3)), hist, -1
 
         if mu <= mu_end and r < tol_end:
@@ -343,6 +345,7 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         if verbose:
             print("WARNING: IPM did not converge to the desired tolerance.")
         hist["trace"] = trace
+        hist["cond_final"] = np.nan
         return np.zeros((3, 3)), hist, -1
 
     # Update history
@@ -359,5 +362,25 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
                                tau0, tau_inf, xi, mu)
     new_hist["C_ep"] = np.array(C_ep)
     new_hist["trace"] = trace
+
+    # Conditioning of the final KKT Jacobian at the converged primal-dual iterate
+    dPhi_final = dPhi_fn(dlambda)
+    J_final = jnp.block([
+        [dPhi_final, jnp.eye(nSlip)],
+        [jnp.diag(slacks), jnp.diag(dlambda)],
+    ])
+    new_hist["cond_final"] = float(jnp.linalg.cond(J_final))
+
+    # Final Newton system exported
+    if trace is not None:
+        new_hist["newton_final"] = {
+            "solved":  np.array(J_final),
+            "kkt":     np.array(J_final),
+            "dPhi":    np.array(dPhi_final),
+            "dlambda": np.array(dlambda),
+            "slacks":  np.array(slacks),
+            "Phi":     np.array(Phi_fn(dlambda)),
+            "mu":      float(mu),
+        }
 
     return np.array(sig), new_hist, total_newton_iter
