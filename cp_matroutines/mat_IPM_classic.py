@@ -227,8 +227,14 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     # 2.  Initialization of IPM
     # ======================================================================
     mu = mu_init
+    # Cold-start seed: scalar (uniform) or a length-m sequence. A non-uniform
+    # seed breaks the symmetry of the iteration and is the only handle on
+    # which solution is picked when the active set is rank deficient.
+    _dg0 = config.get("dgamma_init", None)
+    dlambda = (jnp.ones(nSlip) * jnp.sqrt(mu) if _dg0 is None else
+               jnp.array(np.broadcast_to(np.asarray(_dg0, dtype=float),
+                                         (nSlip,)).copy()))
     slacks = jnp.maximum(-Phi_trial, jnp.sqrt(mu))
-    dlambda = jnp.ones(nSlip) * jnp.sqrt(mu)
 
     # Initial residual
     Phi = Phi_fn(dlambda)

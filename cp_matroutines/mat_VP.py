@@ -131,7 +131,12 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     # ======================================================================
     # 2.  Newton iteration with backtracking (dgamma >= 0 enforced)
     # ======================================================================
-    dgamma = jnp.zeros(nSlip)
+    # Newton seed: scalar (uniform) or a length-m sequence. A non-uniform
+    # seed tests whether the regularized problem has a unique solution.
+    _dg0 = config.get("dgamma_init", None)
+    dgamma = (jnp.zeros(nSlip) if _dg0 is None else
+              jnp.array(np.broadcast_to(np.asarray(_dg0, dtype=float),
+                                        (nSlip,)).copy()))
     n_iter = 0
 
     for n in range(1, max_iter + 1):

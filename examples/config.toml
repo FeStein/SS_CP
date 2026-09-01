@@ -3,8 +3,8 @@
 # ==========================================================================
 
 [Solver]
-method     = "MB-IPM-classic"     # "IPM_classic", "IPM_amu", "IPM_mb", "MB-IPM-classic", "AL", "VP"
-n_steps    = 100          # number of load steps
+method     = "AL"     # "IPM_classic", "IPM_amu", "IPM_mb", "MB-IPM-classic", "AL", "VP"
+n_steps    = 10          # number of load steps
 
 # ==========================================================================
 # IPM parameters
@@ -14,8 +14,8 @@ n_steps    = 100          # number of load steps
 k_max      = 200      # maximum total (outer) IPM iterations
 max_inner  = 50       # maximum Newton iterations per fixed barrier parameter
 mu_init    = 1e-3     # initial barrier parameter mu_0
-mu_end     = 1e-6    # final barrier parameter tolerance
-tol_end    = 1e-10    # final residual tolerance
+mu_end     = 1e-10    # final barrier parameter tolerance
+tol_end    = 1e-12    # final residual tolerance
 theta      = 0.1      # adaptive Newton tolerance multiplier: tol = max(tol_end, theta * mu)
 delta      = 0.5      # barrier parameter update exponent: mu_{k+1} = max_alpha(dlambda * s)^(1+delta)
 tau_min    = 0.995    # fraction-to-boundary parameter
@@ -62,10 +62,10 @@ k_max        = 500     # maximum outer (multiplier) iterations. Higher than the
                        # multi-slip orientations 100 sweeps stall at
                        # r_kkt ~ 1e-9, above tol_phi = 1e-10.
 max_inner    = 100     # maximum Newton iterations per outer step
-mu_init      = 1e-7    # shift parameter mu -- FIXED for the whole solve
+mu_init      = 1e-6    # shift parameter mu -- FIXED for the whole solve
 lambda_init  = 3e-5    # cold-start seed for both lam_k and the slip (must be > 0);
                        # should scale with the load increment
-tol_phi      = 1e-10   # outer KKT tolerance in stress units (natural residual)
+tol_phi      = 1e-11   # outer KKT tolerance in stress units (natural residual)
 theta_in     = 1e-2    # inner tolerance = theta_in * tol_phi (fixed)
 tau_min      = 0.995   # fraction-to-boundary safety factor (applied to s + mu)
 dlam_bound   = 1e-12   # slips at/below this are exempt from the FTB cap (anti-jamming)
@@ -78,9 +78,9 @@ verbose      = true    # print convergence information per load step
 [AL]
 max_outer  = 100       # maximum outer (penalty) iterations (Algorithm 1, i_max)
 max_inner  = 100       # maximum semi-smooth Newton iterations per outer step
-eta_init   = 200.0       # initial penalty parameter eta(0) (paper: 0.005 1/GPa; scale to your stress units)
-eps_c      = 1e-10     # KKT-check tolerance (Algorithm 1, line 7): Phi<=eps_c, dlambda>=-eps_c, |Phi*dlambda|<=eps_c
-eps_min    = 1e-10     # inner Newton residual tolerance (Algorithm 1, line 3): ||R||_2 < eps_min
+eta_init   = 1e-1       # initial penalty parameter eta(0) (paper: 0.005 1/GPa; scale to your stress units)
+eps_c      = 1e-11     # KKT-check tolerance (Algorithm 1, line 7): Phi<=eps_c, dlambda>=-eps_c, |Phi*dlambda|<=eps_c
+eps_min    = 1e-11     # inner Newton residual tolerance (Algorithm 1, line 3): ||R||_2 < eps_min
 verbose    = true      # print convergence information per load step
 
 # ==========================================================================
@@ -92,7 +92,7 @@ max_iter   = 50       # maximum Newton iterations
 tol        = 1e-14     # residual convergence tolerance
 # dt is derived automatically from [Solver] n_steps as dt = 1/n_steps
 p          = 1        # rate exponent (1 = linear Bingham; p>1 = power-law Perzyna
-eta        = 3.061e-1     # viscosity parameter (dgamma0 = dt/eta); overstress ~ eta * gamma_dot
+eta        = 1.0e-5     # viscosity parameter (dgamma0 = dt/eta); overstress ~ eta * gamma_dot
 verbose    = true     # print convergence information per load step
 
 # ==========================================================================
@@ -107,6 +107,7 @@ q          = 1.0      # latent hardening ratio
 xi         = 0.5      # hardening saturation exponent
 tau_inf    = 0.0      # saturation shear stress in MPa
 phi_deg    = [0.0, 0.0, 0.0]   # Euler angles in degree
+#phi_deg    = [45.0, -54.7356, -90.0]   # Euler angles in degree
 
 # ==========================================================================
 # Orientation parameter study (used by ex_orientation_study.py)
@@ -128,10 +129,11 @@ n_workers  = 12     # parallel worker processes (remove or set to 0 for all core
 #   param = "VP.eta",         values = [1e-3, 3e-3, 1e-2]         -> out_eta3, out_eta00, out_eta2
 
 [Sweep]
-#param  = "IPM.mu_end"
-param = "Solver.n_steps"
+param  = "Solver.n_steps"
+#param = "Solver.n_steps"
 #values = [10,50,100, 500, 1000, 5000, 10000]
-values = [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
-#values = [1e-1, 1e-2, 1e-3,1e-4,1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10]
+values = [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000]#, 5000, 10000]
+#values = [1e-1, 1e-2, 1e-3,1e-4,1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12]
+#values = [1e-1, 1e-2, 1e-3,1e-4,1e-5, 1e-6, 1e-7, 1e-8, 1e-9]
 #values = [3e3, 3e2, 3e1, 3e0, 3e-1, 3e-2, 3e-3, 3e-4, 3e-5, 3e-6, 3e-7, 3e-8, 3e-9, 3e-10, 3e-11, 3e-12]
 label  = "steps_"

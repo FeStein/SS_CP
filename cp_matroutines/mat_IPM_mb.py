@@ -134,7 +134,15 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     mu_inc    = float(config["mu_inc"])
     theta     = float(config["theta"])
     max_retry = int(config["max_retry"])
-    lam_init  = float(config["lambda_init"])
+    # Cold-start seed: scalar (uniform) or a length-m sequence. A non-uniform
+    # seed breaks the symmetry of the iteration and is the only handle on
+    # which solution is picked when the active set is rank deficient.
+    lam_init  = np.broadcast_to(np.asarray(config["lambda_init"], dtype=float),
+                                (len(mat.Za),)).copy()
+    _dg0      = config.get("dgamma_init", None)
+    dgam_init = (None if _dg0 is None else
+                 np.broadcast_to(np.asarray(_dg0, dtype=float),
+                                 (len(mat.Za),)).copy())
     tol_phi   = float(config["tol_phi"])             # outer KKT tolerance in stress units (~ eps_phi * tau0)
     theta_in  = float(config.get("theta_in", 1e-2))  # inner safety factor below tol_phi
     theta_mu  = float(config.get("theta_mu", 1e-2))  # inner relaxation ~ theta_mu * mu in early sweeps
@@ -212,9 +220,10 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     # ==========================================================================
     mu      = mu_init
     # cold start
-    lam_k = jnp.ones(nSlip) * lam_init
+    lam_k = jnp.array(lam_init)
     slacks  = jnp.maximum(-Phi_trial, jnp.sqrt(mu))
-    dlambda = jnp.ones(nSlip) * jnp.sqrt(mu)
+    dlambda = (jnp.ones(nSlip) * jnp.sqrt(mu) if dgam_init is None
+               else jnp.array(dgam_init))
 
     ## full warm-start
     #lam_k   = jnp.array(hist.get("lam_k", np.ones(nSlip) * lam_init))
@@ -360,8 +369,9 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             mu_lo    = mu                         # APV must not undo the raise
             retries += 1
             slacks   = jnp.maximum(-Phi_trial, jnp.sqrt(mu))   # cold restart at new mu
-            dlambda  = jnp.ones(nSlip) * jnp.sqrt(mu)
-            lam_k    = jnp.ones(nSlip) * lam_init              # drop the poisoned estimate
+            dlambda  = (jnp.ones(nSlip) * jnp.sqrt(mu) if dgam_init is None
+                        else jnp.array(dgam_init))
+            lam_k    = jnp.array(lam_init)                     # drop the poisoned estimate
             Phi = Phi_fn(dlambda)
             R_g = Phi + slacks
             R_s = dlambda * (slacks + mu) - mu * lam_k

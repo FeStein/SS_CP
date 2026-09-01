@@ -160,12 +160,24 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
         hist_el["yield"] = np.array(Phi_trial)
         hist_el["trace"] = trace
         hist_el["cond_final"] = np.nan      # no Newton system solved
+        # Penalty-ladder diagnostics (see the block after convergence). No rung
+        # was climbed here, so the ladder stays at its entry value.
+        hist_el["n_outer"]   = 0
+        hist_el["eta_final"] = eta_init
+        hist_el["phi_max"]   = float(jnp.max(Phi_trial))
+        hist_el["compl_max"] = np.nan       # no multiplier to pair with Phi
         return np.array(sig_trial), hist_el, 0
 
     # ========================================================================
     # 2.  Initialisation (Algorithm 1, line 1)
     # ========================================================================
-    dlambda = jnp.zeros(nSlip)
+    # Cold-start seed: scalar (uniform) or a length-m sequence. dlambda is both
+    # the primal slip and the multiplier estimate here, so this is the only
+    # handle on which solution is picked when the active set is rank deficient.
+    _dg0 = config.get("dgamma_init", None)
+    dlambda = (jnp.zeros(nSlip) if _dg0 is None else
+               jnp.array(np.broadcast_to(np.asarray(_dg0, dtype=float),
+                                         (nSlip,)).copy()))
     eta = eta_init
     total_newton_iter = 0
     converged = False
@@ -271,6 +283,10 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
             print("WARNING: AL did not converge.")
         hist["trace"] = trace
         hist["cond_final"] = np.nan
+        hist["n_outer"]   = max_outer
+        hist["eta_final"] = float(eta)
+        hist["phi_max"]   = kkt_feas
+        hist["compl_max"] = kkt_compl
         return np.zeros((3, 3)), hist, -1
 
     eps_p_new = eps_p_n + jnp.einsum('a,aij->ij', dlambda, Za)
@@ -286,6 +302,19 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     new_hist["tau_h"]   = hist["tau_h"]
     new_hist["n_iter"]  = total_newton_iter
     new_hist["yield"]   = np.array(Phi_fn(dlambda))
+
+    # Penalty-ladder diagnostics. eta is reset to eta_init at every load step and
+    # doubled once per outer iteration, so the solve terminates on the discrete
+    # ladder eta_init * 2^k with k = n_outer - 1. The ladder is entered at a
+    # height set by the trial overstress Phi_trial ~ G * dgamma ~ dt (cold start
+    # dlambda = 0), which makes the terminal accuracy load-increment dependent:
+    # within a fixed k the error inherits that entry height and decays as O(dt),
+    # and it jumps back up whenever a smaller increment lets the loop drop a rung.
+    # phi_max / compl_max record which KKT condition (Alg. 1, line 7) was binding.
+    new_hist["n_outer"]   = outer + 1
+    new_hist["eta_final"] = float(eta)
+    new_hist["phi_max"]   = kkt_feas
+    new_hist["compl_max"] = kkt_compl
 
     C_ep = compute_tangent_IFT_al(dlambda, eps_j, eps_p_n, gamma_n, C, Za,
                                    tau0, tau_inf, xi, eta)

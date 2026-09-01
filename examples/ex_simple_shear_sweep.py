@@ -28,6 +28,7 @@ Example [Sweep] block in config.toml:
 import copy
 import math
 import os
+import re
 import shutil
 import tomllib
 import numpy as np
@@ -65,6 +66,40 @@ def _folder_tag(value, idx: int) -> str:
     return f"{idx:02d}"
 
 
+def _save_config(value, out_dir):
+    """Copy config.toml into out_dir with the swept parameter set to `value`.
+
+    shutil.copy2 alone would store the *base* value, which silently mislabels
+    every sweep folder. Patch the single assignment line inside [section] and
+    verify by re-parsing; fall back to a plain note if the line is not found.
+    """
+    dst = os.path.join(out_dir, "config.toml")
+    with open(config_path, encoding="utf-8") as f:
+        lines = f.readlines()
+
+    in_section = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_section = stripped.split("#")[0].strip() == f"[{section}]"
+        elif in_section and re.match(rf"{re.escape(key)}\s*=", stripped):
+            comment = line.split("#", 1)
+            suffix = "  #" + comment[1] if len(comment) > 1 else "\n"
+            lines[i] = f"{key:<10} = {value!r}{suffix}"
+            break
+
+    with open(dst, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    with open(os.path.join(out_dir, "sweep_value.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{param_path} = {value!r}\n")
+
+    with open(dst, "rb") as f:
+        if tomllib.load(f).get(section, {}).get(key) != value:
+            print(f"  WARNING: could not patch {param_path} into config.toml; "
+                  f"see sweep_value.txt for the value actually used.")
+
+
+
 # --- Loading: symmetric simple shear ------------------------------------------
 eps_max = np.array([
     [0.0, 0.005, 0.0],
@@ -87,7 +122,7 @@ for idx, value in enumerate(values):
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(out_dir)
-    shutil.copy2(config_path, os.path.join(out_dir, "config.toml"))
+    _save_config(value, out_dir)
 
     compute_stress, solver_cfg = get_solver(config)
 
@@ -127,8 +162,15 @@ for idx, value in enumerate(values):
             f.write(f"{shear}," + ",".join(map(str, vsig)) + "\n")
 
         cond = hist.get("cond_final", float("nan"))
+        # Penalty/barrier ladder diagnostics (currently written by mat_AL_SB);
+        # nan for solvers that do not expose them.
+        n_outer   = hist.get("n_outer",   float("nan"))
+        eta_final = hist.get("eta_final", float("nan"))
+        phi_max   = hist.get("phi_max",   float("nan"))
+        compl_max = hist.get("compl_max", float("nan"))
         with open(os.path.join(out_dir, "newton.csv"), "a") as f:
-            f.write(f"{shear},{n_iter},{cond}\n")
+            f.write(f"{shear},{n_iter},{cond},"
+                    f"{n_outer},{eta_final},{phi_max},{compl_max}\n")
 
         with open(os.path.join(out_dir, "yield.csv"), "a") as f:
             f.write(f"{shear}," + ",".join(map(str, hist["yield"])) + "\n")

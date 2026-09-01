@@ -143,7 +143,14 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     k_max      = int(config["k_max"])
     max_inner  = int(config["max_inner"])
     mu_init    = float(config["mu_init"])
-    lam_init   = float(config["lambda_init"])
+    # Cold-start seed. Scalar (uniform, the base method) or a length-m
+    # sequence: a non-uniform seed breaks the symmetry of the iteration and
+    # is what selects among the solutions of a Taylor-ambiguous problem.
+    lam_init   = np.broadcast_to(np.asarray(config["lambda_init"], dtype=float),
+                                 (len(mat.Za),)).copy()
+    dgam_init  = np.broadcast_to(np.asarray(config.get("dgamma_init",
+                                            config["lambda_init"]), dtype=float),
+                                 (len(mat.Za),)).copy()
     tol_phi    = float(config["tol_phi"])        # outer KKT tolerance in stress units
     theta_in   = float(config["theta_in"])       # inner tolerance = theta_in * tol_phi
     tau_min    = float(config["tau_min"])        # fraction-to-boundary factor
@@ -192,8 +199,8 @@ def compute_stress(eps: np.ndarray, hist: dict, mat: Material,
     # ==========================================================================
     mu     = mu_init            # FIXED for the whole solve (base method)
     tol_in = theta_in * tol_phi # FIXED inner tolerance
-    lam_k   = jnp.ones(nSlip) * lam_init   # multiplier estimate
-    dlambda = jnp.ones(nSlip) * lam_init   # primal slip increment
+    lam_k   = jnp.array(lam_init)          # multiplier estimate
+    dlambda = jnp.array(dgam_init)         # primal slip increment
     Phi     = Phi_fn(dlambda)
     slacks  = jnp.maximum(-Phi, 0.0)
 
